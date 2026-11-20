@@ -24,7 +24,7 @@ BEHAVIOR_PREDICTION_SCHEMA = {"type": "object", "additionalProperties": False,
                    "source": {"type": "string"}}}
 
 
-SOURCE_SELECTION_VERSIONS = {"4.10.8", "4.10.9"}
+SOURCE_SELECTION_VERSIONS = {"4.10.8", "4.10.9", "4.10.10"}
 BEHAVIOR_VERSIONS = {"4.10.7"} | SOURCE_SELECTION_VERSIONS
 _SOURCE_FIELDS = ["action", "outcome", "reason", "source"]
 
@@ -140,15 +140,14 @@ def prediction_guidance(response, visible, *, chinese, protocol_version="4.10.7"
     return forecast, {"role": "user", "content": json.dumps(frame, ensure_ascii=False)}
 
 
-def place_student_guidance(guidance, messages, target, schema):
+def place_student_guidance(guidance, messages, target, schema, *, single_task=False):
     """Locate the predictor's selected signed task in the already constructed student request."""
     if guidance is None:
         return None, {"status": "no_validated_selection"}
     frame = json.loads(guidance["content"])
     placement = {"status": "appended", "source": frame["source"], "direction": frame["direction"],
                  "positions": [{"message_index": len(messages), "role": "user", "json_pointer": "/quoted_visible_evidence"}]}
-    if (frame["source"] != "local_task" or frame["direction"] != "check_submission_fields"
-            or not target or schema != local_submission_schema(target)
+    if (not target or schema != local_submission_schema(target)
             or [m["role"] for m in messages] != ["system", "user"]):
         return guidance, placement
     try:
@@ -158,8 +157,17 @@ def place_student_guidance(guidance, messages, target, schema):
     instruction = target["request"]
     system = messages[0]["content"]
     if (not isinstance(packet, dict) or packet.get("origin") != "tutoring_program"
-            or packet.get("current_local_task") != instruction or frame["quoted_visible_evidence"] != instruction
-            or not system.endswith("\n\n" + instruction)):
+            or packet.get("current_local_task") != instruction or not system.endswith("\n\n" + instruction)):
+        return guidance, placement
+    if single_task and frame["direction"] == "apply_latest_disclosure" and isinstance(packet.get("public_reference"), dict):
+        history = packet["public_reference"].get("quoted_teacher_disclosures")
+        if (isinstance(history, list) and history and isinstance(history[-1], dict)
+                and frame["source"] == f"disclosure.{history[-1].get('ordinal')}"
+                and frame["quoted_visible_evidence"] == history[-1].get("text")):
+            return None, {**placement, "status": "already_in_public_reference", "positions": [
+                {"message_index": 1, "role": "user", "json_pointer": f"/public_reference/quoted_teacher_disclosures/{len(history)-1}/text"}]}
+    if (frame["source"] != "local_task" or frame["direction"] != "check_submission_fields"
+            or frame["quoted_visible_evidence"] != instruction):
         return guidance, placement
     return None, {**placement, "status": "already_in_current_request", "positions": [
         {"message_index": 0, "role": "system", "content_span": [len(system) - len(instruction), len(system)]},

@@ -6,7 +6,7 @@ from decimal import Decimal
 
 from .guided_answers import contains_chat_control
 from .guided_teaching_steps import verified_steps_digest
-from lib.prompts.workflow_guided_answers import SCOPED_LOCAL_STUDENT, SCOPED_LOCAL_STUDENT_ZH
+from lib.prompts.workflow_guided_answers import SCOPED_LOCAL_STUDENT, SCOPED_LOCAL_STUDENT_ZH, SINGLE_LOCAL_TASK, SINGLE_LOCAL_TASK_ZH
 
 
 LOCAL_SUBMISSION_SCHEMA = {"anyOf": [
@@ -35,29 +35,46 @@ def local_submission_schema(target):
     return {"anyOf": [{**report, "properties": {**report["properties"], "values": values}}, blocked]}
 
 
-def scoped_local_messages(source, target, guidance, chinese, experience=""):
+def local_public_reference(visible, previous):
+    reference = {"quoted_teacher_disclosures": visible["ordered_published_disclosures"],
+                 "confirmed_student_work": visible["confirmed_student_work"],
+                 "reviewed_student_approaches": [a["text"] for a in previous.get("supported_student_approaches", [])]}
+    if previous.get("formal_answer"):
+        reference["previous_student_answer_to_reconsider"] = previous["formal_answer"]["response"]["content"]
+    return reference
+
+
+def scoped_local_messages(source, target, guidance, chinese, experience="", *, public_reference=None):
     instruction = SCOPED_LOCAL_STUDENT_ZH if chinese else SCOPED_LOCAL_STUDENT
     materials = {"original_user_question": source["question"]}
     if source.get("task_system"):
         materials["original_task_instructions"] = source["task_system"]
     packet = {"origin": "tutoring_program", "quoted_source_material": materials,
               "published_guidance_and_established_work": guidance, "current_local_task": target["request"]}
+    if public_reference is not None:
+        instruction = SINGLE_LOCAL_TASK_ZH if chinese else SINGLE_LOCAL_TASK
+        packet = {"origin": "tutoring_program", "quoted_source_material": materials,
+                  "public_reference": public_reference,
+                  "signed_operation": {"question_quote": target["question_quote"], "operation": target["operation"]},
+                  "current_local_task": target["request"]}
     return [{"role": "system", "content": "\n\n".join(filter(None, (experience, instruction, target["request"])))},
             {"role": "user", "content": json.dumps(packet, ensure_ascii=False)}]
 
 
-def dispatched_local_guidance(payload, source, target, chinese):
+def dispatched_local_guidance(payload, source, target, chinese, *, public_reference=None, experience=None):
     """Recover only the public context of a source-bound program request with its native submit contract."""
     messages = payload["messages"]
     if [m.get("role") for m in messages] != ["system", "user"]:
         raise ValueError("the scoped local task requires a program request and attributed original materials")
     packet = json.loads(messages[1]["content"])
     guidance = packet.get("published_guidance_and_established_work") if isinstance(packet, dict) else None
-    if not isinstance(guidance, str):
+    if public_reference is None and not isinstance(guidance, str):
         raise ValueError("the scoped local task lacks its public guidance")
-    expected = scoped_local_messages(source, target, guidance, chinese)
+    expected = scoped_local_messages(source, target, guidance, chinese, experience or "", public_reference=public_reference)
     contract = payload.get("response_format", {}).get("json_schema", {})
-    if (messages[1] != expected[1] or not messages[0]["content"].endswith(expected[0]["content"])
+    matches_system = (messages[0] == expected[0] if experience is not None else
+                      messages[0]["content"].endswith(expected[0]["content"]))
+    if (messages[1] != expected[1] or not matches_system
             or contract.get("schema") != local_submission_schema(target) or contract.get("strict") is not True
             or payload["response_format"].get("type") != "json_schema"):
         raise ValueError("scoped local request differs from its original task, role or response schema")

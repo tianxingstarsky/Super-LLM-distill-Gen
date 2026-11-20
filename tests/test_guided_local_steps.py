@@ -4,6 +4,7 @@ import pytest
 from jsonschema import Draft202012Validator
 
 from lib.contexts.workflows.application.generate_guided_answer import GenerateGuidedAnswer
+from lib.contexts.workflows.domain.experience_evolution import digest
 from lib.contexts.workflows.domain.guided_answers import validate_source
 from lib.contexts.workflows.domain.guided_behavior_prediction import (
     observe_prediction, place_student_guidance, prediction_due, prediction_feedback, prediction_guidance, prediction_messages, prediction_schema,
@@ -117,52 +118,68 @@ def test_selected_task_must_occupy_the_native_submission_field_to_omit_a_message
     ("4.10.7", '{"action":"report","values":{"position":2,"former_bit":1,"current_bit":0},"explanation":"I kept the slot settings separate."}', "verified_local_value"),
     ("4.10.8", '{"action":"report","values":{"position":2,"former_bit":1,"current_bit":0},"explanation":"I kept the slot settings separate."}', "verified_local_value"),
     ("4.10.9", '{"action":"report","values":{"position":2,"former_bit":1,"current_bit":0},"explanation":"I kept the slot settings separate."}', "verified_local_value"),
+    ("4.10.10", '{"action":"report","values":{"position":2,"former_bit":1,"current_bit":0},"explanation":"I kept the slot settings separate."}', "verified_local_value"),
 ])
 def test_local_reports_and_obstacles_flow_to_the_next_tutor_and_whole_answer(tmp_path, version, first_step, status):
     source, receipt = signed_source()
     steps = source["verified_teaching_steps"]["steps"]
     inputs = {}
     hints = ["Separate the replacement slot from its former setting.", "Try each value of the first linked slot."]
+    placement = "already_in_public_reference" if version == "4.10.10" else "already_in_current_request"
+    if version == "4.10.10":
+        hints[0] = "You have finished counting the alternatives. List all the arrangements next."
     solved = "The first bit has two choices and the final pair has two assignments.\nFinal answer: 4"
 
     def request(role, index, messages, schema):
         inputs[role, index] = messages
         if role == "student":
             pair_report = ('{"action":"report","values":["10","01"],"explanation":"I tried both orders."}'
-                           if version in {"4.10.5", "4.10.6", "4.10.7", "4.10.8", "4.10.9"} else '["10","01"]')
+                           if version in {"4.10.5", "4.10.6", "4.10.7", "4.10.8", "4.10.9", "4.10.10"} else '["10","01"]')
             reply = {1: "8", 2: first_step, 3: pair_report, 4: solved}[index]
-            if version in {"4.10.5", "4.10.6", "4.10.7", "4.10.8", "4.10.9"} and index in (2, 3):
-                if version in {"4.10.6", "4.10.7", "4.10.8", "4.10.9"} and index == 2:
+            if version in {"4.10.5", "4.10.6", "4.10.7", "4.10.8", "4.10.9", "4.10.10"} and index in (2, 3):
+                if version in {"4.10.6", "4.10.7", "4.10.8", "4.10.9", "4.10.10"} and index == 2:
                     form = schema["anyOf"][0]["properties"]["values"]
                     assert form["required"] == ["position", "former_bit", "current_bit"]
                     assert Draft202012Validator(schema).is_valid(json.loads(reply))
                 else:
                     assert schema == LOCAL_SUBMISSION_SCHEMA
-                applied = (version in {"4.10.7", "4.10.8"} and index == 2) or (version == "4.10.9" and index == 3)
+                applied = (version in {"4.10.7", "4.10.8"} and index == 2) or (version in {"4.10.9", "4.10.10"} and index == 3)
                 assert [m["role"] for m in messages] == (["system", "user", "user"] if applied else ["system", "user"])
                 packet = json.loads(messages[1]["content"])
+                if version == "4.10.10":
+                    ref = packet["public_reference"]
+                    published = ref["quoted_teacher_disclosures"]
+                    assert published == json.loads(inputs["behavior_prediction", index][-1]["content"])["ordered_published_disclosures"]
+                    assert [item["ordinal"] for item in published] == list(range(1, index))
+                    assert all(item["text"].endswith(hint) for item, hint in zip(published,hints))
+                    assert "published_guidance_and_established_work" not in packet
+                    assert hints[0] not in messages[0]["content"]
+                    assert bool(ref["confirmed_student_work"]) is (index == 3)
+                    assert "Submit only the current_local_task" in messages[0]["content"]
                 assert packet["origin"] == "tutoring_program"
                 assert packet["quoted_source_material"] == {"original_user_question": source["question"]}
                 assert packet["current_local_task"] in messages[0]["content"]
             else:
                 assert schema is None
         elif role == "behavior_prediction":
-            reply = dict(action="report_local", outcome="unknown" if version in {"4.10.8", "4.10.9"} else "local_values_verified", reason="PRIVATE_FORECAST_SENTINEL",
+            reply = dict(action="report_local", outcome="unknown" if version in {"4.10.8", "4.10.9", "4.10.10"} else "local_values_verified", reason="PRIVATE_FORECAST_SENTINEL",
                          direction="apply_latest_disclosure", source="disclosure.1") if index == 2 else dict(
                              action="unknown", outcome="unknown", reason="PRIVATE_FORECAST_SENTINEL", direction="none", source="")
-            if version in {"4.10.8", "4.10.9"}:
+            if version in {"4.10.8", "4.10.9", "4.10.10"}:
                 del reply["direction"]
-                if version == "4.10.9":
+                if version in {"4.10.9", "4.10.10"}:
                     reply["source"] = "local_task" if index == 2 else "finding.1"
+                    if version == "4.10.10" and index == 2:
+                        reply["source"] = "disclosure.1"
                 assert Draft202012Validator(schema).is_valid(reply)
         elif role == "disclosure_draft":
             step = steps[index-1]
             if index == 2:
                 packet = json.loads(messages[-1]["content"])
                 assert packet["current_difficulty"]["local_step"]["status"] == status
-                if version == "4.10.9":
+                if version in {"4.10.9", "4.10.10"}:
                     feedback = packet["current_difficulty"]["behavior_prediction_feedback"]
-                    assert feedback["guidance_delivery"]["status"] == "already_in_current_request"
+                    assert feedback["guidance_delivery"]["status"] == placement
                     assert feedback["student_guidance"] is None
             reply = dict(decision="apply:"+step["id"], question_quote=step["quote"], bridge=step["quote"]+".",
                          hint=hints[index-1], reason="Use the selected constraint.")
@@ -174,7 +191,7 @@ def test_local_reports_and_obstacles_flow_to_the_next_tutor_and_whole_answer(tmp
             packet = json.loads(messages[-1]["content"])["proposed_next_teacher_disclosure"]
             reply = dict(decision="release", bridge=packet["bridge"], citations=citations, reason="The hint applies.",
                          pairing=dict(evidence_support=True, student_fit=True, history_fit="first" if index == 1 else "continuous"))
-            if version in {"4.10.5", "4.10.6", "4.10.7", "4.10.8", "4.10.9"}:
+            if version in {"4.10.5", "4.10.6", "4.10.7", "4.10.8", "4.10.9", "4.10.10"}:
                 del reply["bridge"]
         elif role == "coach":
             assert index == 4
@@ -187,9 +204,9 @@ def test_local_reports_and_obstacles_flow_to_the_next_tutor_and_whole_answer(tmp
                     **({"usage":{"prompt_tokens":19, "completion_tokens":5}} if role == "behavior_prediction" else {}))
 
     calls = iter([("student",1), ("disclosure_draft",1), ("disclosure",1),
-                  *([("behavior_prediction",2)] if version in {"4.10.7", "4.10.8", "4.10.9"} else []), ("student",2),
+                  *([("behavior_prediction",2)] if version in {"4.10.7", "4.10.8", "4.10.9", "4.10.10"} else []), ("student",2),
                   ("disclosure_draft",2), ("disclosure",2),
-                  *([("behavior_prediction",3)] if version in {"4.10.7", "4.10.8", "4.10.9"} else []), ("student",3), ("student",4), ("coach",4), ("final_answer",4)])
+                  *([("behavior_prediction",3)] if version in {"4.10.7", "4.10.8", "4.10.9", "4.10.10"} else []), ("student",3), ("student",4), ("coach",4), ("final_answer",4)])
 
     class Endpoint:
         def __init__(self, name):
@@ -245,16 +262,16 @@ def test_local_reports_and_obstacles_flow_to_the_next_tutor_and_whole_answer(tmp
         assert event["author"] == "teacher_authored" and local["task_author"] == "program"
         assert not event["eligible"] and not event["transfer_gain_supported"]
         assert bool(local["verified_submissions"]) is (local["status"] == "verified_local_value")
-    if version in {"4.10.7", "4.10.8", "4.10.9"}:
+    if version in {"4.10.7", "4.10.8", "4.10.9", "4.10.10"}:
         summary = export(input_path, run)
         assert summary["behavior_predictions"] == {"observed_student_turns":2, "guidance_applied":1,
-            **({"by_guidance_delivery":{"already_in_current_request":1,"appended":1}} if version == "4.10.9" else {}),
+            **({"by_guidance_delivery":{placement:1,"appended":1}} if version in {"4.10.9", "4.10.10"} else {}),
             "action_agreement":{"matched":1,"unknown":1},
-            "outcome_agreement":({"unknown":2} if version in {"4.10.8", "4.10.9"} else {"matched":1,"unknown":1})}
+            "outcome_agreement":({"unknown":2} if version in {"4.10.8", "4.10.9", "4.10.10"} else {"matched":1,"unknown":1})}
         assert summary["usage_by_role"]["new"]["behavior_prediction"] == {
             "responses":2,"usage_unreported":0,"prompt_tokens":38,"completion_tokens":10}
         assert [event["evidence"]["behavior_prediction"]["guidance_applied"] for event in observed["events"]] == (
-            [False, True] if version == "4.10.9" else [True, False])
+            [False, True] if version in {"4.10.9", "4.10.10"} else [True, False])
         assert "PRIVATE_FORECAST_SENTINEL" not in (run/"training-targets.jsonl").read_text(encoding="utf8")
         predict_path = case_path.parent/"002-behavior_prediction.json"
         assert json.loads(predict_path.read_bytes())["role"] == "behavior_prediction"
@@ -262,8 +279,23 @@ def test_local_reports_and_obstacles_flow_to_the_next_tutor_and_whole_answer(tmp
         assert run_guided_cases(input_path, run, {"student":Endpoint("learner"), "coach":Endpoint("reviewer")},
             {"version":"test"}, 3, verified_step_receipts=registry)["behavior_predictions"] == summary["behavior_predictions"]
         archived = json.loads(case_path.read_bytes())
-        if version == "4.10.9":
-            case["attempts"][1]["behavior_prediction"]["guidance_delivery"]["positions"][1]["message_index"] = 2
+        if version == "4.10.10":
+            student_path = case_path.parent/"002-student.json"
+            saved = student_path.read_bytes()
+            receipt_row = json.loads(saved)
+            packet = json.loads(receipt_row["request"]["messages"][1]["content"])
+            packet["public_reference"]["confirmed_student_work"] = [{"id":"made-up", "text":hints[0]}]
+            receipt_row["request"]["messages"][1]["content"] = json.dumps(packet,ensure_ascii=False)
+            receipt_row["identity"] = digest({"binding": case["binding"], "id": case["id"], "payload": receipt_row["request"]})
+            case["attempts"][1]["student_request_messages"] = receipt_row["request"]["messages"]
+            student_path.write_text(json.dumps(receipt_row), encoding="utf8")
+            case_path.write_text(json.dumps(case), encoding="utf8")
+            with pytest.raises(ValueError, match="scoped local request"):
+                export(input_path, run)
+            student_path.write_bytes(saved)
+            case = json.loads(json.dumps(archived))
+        if version in {"4.10.9", "4.10.10"}:
+            case["attempts"][1]["behavior_prediction"]["guidance_delivery"]["positions"][-1]["message_index"] = 2
         else:
             case["attempts"][1]["behavior_prediction"]["student_guidance"] = None
         case_path.write_text(json.dumps(case), encoding="utf8")

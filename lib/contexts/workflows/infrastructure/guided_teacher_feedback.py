@@ -107,7 +107,8 @@ def teaching_events(case, folder, protocol, parents, experience, *, source, trus
                 if after.get("solving_role", "student") != "student":
                     event["category"] = "changed_solver"
                 else:
-                    delivery = disclosure_delivery(case, before, folder, protocol, trusted=trusted, endpoints=endpoints)
+                    delivery = disclosure_delivery(case, before, folder, protocol, trusted=trusted, endpoints=endpoints,
+                                                   experience=experience)
                     behavior = delivery.get("behavior_prediction")
                     if behavior:
                         prediction = archive_receipt(folder, case["binding"], case["id"], "behavior_prediction",
@@ -144,10 +145,10 @@ def teaching_events(case, folder, protocol, parents, experience, *, source, trus
                     if behavior:
                         evidence["behavior_prediction"] = behavior
                     guidance_applied = bool(behavior and behavior["guidance_applied"])
-                    if protocol in {"4.10.3", "4.10.4", "4.10.5", "4.10.6", "4.10.7", "4.10.8", "4.10.9"} and not after.get("solving_role"):
+                    if protocol in {"4.10.3", "4.10.4", "4.10.5", "4.10.6", "4.10.7", "4.10.8", "4.10.9", "4.10.10"} and not after.get("solving_role"):
                         language = str(source.get("source", {}).get("language") or "").lower()
                         chinese = language.startswith("zh") if language else any("\u4e00" <= c <= "\u9fff" for c in source["question"])
-                        fixed_fields = protocol in {"4.10.6", "4.10.7", "4.10.8", "4.10.9"}
+                        fixed_fields = protocol in {"4.10.6", "4.10.7", "4.10.8", "4.10.9", "4.10.10"}
                         scoped = fixed_fields or protocol == "4.10.5"
                         target = local_step_target(source, hint, trusted, chinese=chinese,
                                                    scoped=scoped, fixed_fields=fixed_fields)
@@ -155,10 +156,13 @@ def teaching_events(case, folder, protocol, parents, experience, *, source, trus
                             payload = receipt["request"]
                             if guidance_applied:
                                 payload = {**payload, "messages": payload["messages"][:-1]}
-                            actual = (dispatched_local_guidance(payload, source, target, chinese)
-                                      if scoped else receipt["request"]["messages"][-1]["content"])
-                            if (not actual.startswith(local_step_material(target))
-                                    or receipt["response"].get("model") != learner_model):
+                            if protocol != "4.10.10":
+                                actual = (dispatched_local_guidance(payload, source, target, chinese)
+                                          if scoped else receipt["request"]["messages"][-1]["content"])
+                                if not actual.startswith(local_step_material(target)):
+                                    raise ValueError("local reply lacks the original dispatched operation")
+                            # The typed public context was already checked against this signed source at delivery.
+                            if receipt["response"].get("model") != learner_model:
                                 raise ValueError("local reply lacks the original dispatched operation or verified learner")
                             replay, facts = check_local_step(target, receipt["response"], after["attempt"], scoped=scoped)
                             if after.get("local_step") != replay:
