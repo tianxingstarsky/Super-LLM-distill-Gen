@@ -4,11 +4,12 @@ import json
 import re
 
 from .guided_answers import check_direct_answer, contains_chat_control, prior_clue_evidence, validate_public_guidance
+from .guided_protocol_versions import CALCULATION_PLAN_VERSIONS
 from .guided_disclosure_text import locate_teacher_premise
 from .guided_teaching_steps import verified_steps_digest
 
 
-RENDERED_CONTINUATION_VERSIONS = {"4.8.2", "4.8.3", "4.9.0", "4.9.1", "4.10.0", "4.10.1", "4.10.2", "4.10.3", "4.10.4", "4.10.5", "4.10.6", "4.10.7", "4.10.8", "4.10.9", "4.10.10"}
+RENDERED_CONTINUATION_VERSIONS = {"4.8.2", "4.8.3", "4.9.0", "4.9.1"} | CALCULATION_PLAN_VERSIONS
 
 
 def render_student_continuation(view, approaches, *, chinese):

@@ -11,6 +11,7 @@ from lib.prompts.workflow_guided_answers import (
     PRIVATE_WORKED_REVIEW, PUBLIC_WORKED_WORDING, TUTOR_OBSERVATION_SOURCES, WORKED_DISCLOSURE_AUTHOR, WORKED_DISCLOSURE_REVIEW,
 )
 from ..domain.guided_answers import prior_clue_evidence, read_teacher_submission
+from ..domain.guided_protocol_versions import ATTRIBUTED_TUTORING_VERSIONS
 from ..domain.guided_behavior_prediction import prediction_feedback
 from ..domain.guided_disclosure_text import (
     checked_reviewer_pairing, locate_authored_task_citations, locate_teacher_premise, render_teacher_text,
@@ -57,7 +58,7 @@ def _review_material(source, attempt, retained, findings, disclosed, candidate):
     anchor = candidate["replaces_from"]
     # A faulty student claim identifies the difficulty. It is never a valid premise.
     prediction = attempt.get("behavior_prediction")
-    separate_sources = bool(prediction and prediction.get("protocol_version") == "4.10.10")
+    separate_sources = bool(prediction and prediction.get("protocol_version") in ATTRIBUTED_TUTORING_VERSIONS)
     difficulty = {"at": anchor}
     if not separate_sources:
         observed = formal["response"]["content"] if formal else (

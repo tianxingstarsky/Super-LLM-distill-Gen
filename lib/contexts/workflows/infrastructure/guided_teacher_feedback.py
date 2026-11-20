@@ -9,6 +9,7 @@ from filelock import FileLock
 from ..application.guided_experience import observed_teacher_disclosure
 from ..application.guided_teacher_feedback import MIXED_INTERMEDIATE, OBSERVED_REWARDS, observed_followup
 from ..domain.experience_evolution import digest
+from ..domain.guided_protocol_versions import ATTRIBUTED_TUTORING_VERSIONS, LOCAL_STEP_VERSIONS, TYPED_SUBMISSION_VERSIONS
 from ..domain.guided_answers import inspect_answer, read_teacher_submission
 from ..domain.guided_local_steps import check_local_step, dispatched_local_guidance, local_step_material, local_step_target
 from ..domain.guided_student_calculations import attributable_mixed_calculations, recovered_student_calculations
@@ -145,10 +146,10 @@ def teaching_events(case, folder, protocol, parents, experience, *, source, trus
                     if behavior:
                         evidence["behavior_prediction"] = behavior
                     guidance_applied = bool(behavior and behavior["guidance_applied"])
-                    if protocol in {"4.10.3", "4.10.4", "4.10.5", "4.10.6", "4.10.7", "4.10.8", "4.10.9", "4.10.10"} and not after.get("solving_role"):
+                    if protocol in LOCAL_STEP_VERSIONS and not after.get("solving_role"):
                         language = str(source.get("source", {}).get("language") or "").lower()
                         chinese = language.startswith("zh") if language else any("\u4e00" <= c <= "\u9fff" for c in source["question"])
-                        fixed_fields = protocol in {"4.10.6", "4.10.7", "4.10.8", "4.10.9", "4.10.10"}
+                        fixed_fields = protocol in TYPED_SUBMISSION_VERSIONS
                         scoped = fixed_fields or protocol == "4.10.5"
                         target = local_step_target(source, hint, trusted, chinese=chinese,
                                                    scoped=scoped, fixed_fields=fixed_fields)
@@ -156,7 +157,7 @@ def teaching_events(case, folder, protocol, parents, experience, *, source, trus
                             payload = receipt["request"]
                             if guidance_applied:
                                 payload = {**payload, "messages": payload["messages"][:-1]}
-                            if protocol != "4.10.10":
+                            if protocol not in ATTRIBUTED_TUTORING_VERSIONS:
                                 actual = (dispatched_local_guidance(payload, source, target, chinese)
                                           if scoped else receipt["request"]["messages"][-1]["content"])
                                 if not actual.startswith(local_step_material(target)):

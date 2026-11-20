@@ -4,6 +4,7 @@ import json
 
 from lib.prompts.workflow_guided_answers import BEHAVIOR_PREDICTOR, BEHAVIOR_PREDICTOR_4_10_8
 from .guided_answers import inspect_answer
+from .guided_protocol_versions import BEHAVIOR_VERSIONS, SOURCE_SELECTION_VERSIONS
 from .guided_local_steps import local_submission_schema
 
 
@@ -24,8 +25,6 @@ BEHAVIOR_PREDICTION_SCHEMA = {"type": "object", "additionalProperties": False,
                    "source": {"type": "string"}}}
 
 
-SOURCE_SELECTION_VERSIONS = {"4.10.8", "4.10.9", "4.10.10"}
-BEHAVIOR_VERSIONS = {"4.10.7"} | SOURCE_SELECTION_VERSIONS
 _SOURCE_FIELDS = ["action", "outcome", "reason", "source"]
 
 
