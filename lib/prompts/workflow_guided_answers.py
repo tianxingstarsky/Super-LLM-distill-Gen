@@ -260,6 +260,11 @@ QUOTED_DISCLOSURE = """Use paired double quotation marks solely for words copied
 DISCLOSURE_PAIRING = """Assess the exact public_text that the learner would see. In pairing record whether the proposed move gives this learner a useful next action, whether the cited premises actually justify that action, and whether it builds on the last published teaching move. Use first only when no preceding hint has been published. An exact citation proves the source of the words, not the proposed implication. A program recommendation still needs an independent judgment. A weak operation can deliberately leave the result of its check for the learner."""
 
 
+SIGNED_TASK_AUTHOR = "When you choose an operation with a student_task, use the evidence to help the learner make that specific submission and leave it for them to complete, including in your first disclosure."
+
+SIGNED_TASK_REVIEW = "For an applied operation with a student_task, mark student_fit false if the author's public wording asks the learner for a different immediate deliverable or claims progress absent from the established evidence."
+
+
 def with_disclosure_pairing(schema):
     fields = {"student_fit": {"type": "boolean"}, "evidence_support": {"type": "boolean"},
               "history_fit": {"type": "string", "enum": ["first", "continuous", "disconnected"]}}

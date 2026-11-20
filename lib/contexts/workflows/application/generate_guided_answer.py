@@ -99,6 +99,8 @@ class GenerateGuidedAnswer:
         scoped_local = fixed_fields or protocol_version == "4.10.5"
         immutable_review = scoped_local or protocol_version == "4.10.4"
         local_steps = immutable_review or protocol_version == "4.10.3"
+        resolve_local_task = partial(local_step_target, source, trusted=trusted_solution_receipts,
+                                     chinese=chinese, scoped=scoped_local, fixed_fields=fixed_fields)
         delivery_handoff = local_steps or protocol_version == "4.10.2"
         contextual_operations = delivery_handoff or protocol_version == "4.10.1"
         if (trusted_solution_receipts or continuation_model is not None) and not evidenced_progress:
@@ -128,6 +130,7 @@ class GenerateGuidedAnswer:
             assess_hint = partial(review_or_recommend_disclosure, teacher_experience=teacher_experience,
                                   tried=tried_verified_steps, task_analysis=task_analysis,
                                   contextual_operations=contextual_operations, immutable_review=immutable_review,
+                                  resolve_local_task=resolve_local_task if protocol_version == "4.10.11" else None,
                                   quoted_premises=protocol_version == "4.7.1" or evidenced_progress,
                                   check_arithmetic=check_arithmetic,
                                   bare_answer_operations=check_arithmetic and bare_answer_operations)
@@ -238,8 +241,7 @@ class GenerateGuidedAnswer:
                 else:
                     last_full_input_evidence = (list(active), dict(findings), dict(approaches))
             messages = list(initial_messages)
-            local_target = (local_step_target(source, attempts[-1].get("disclosure"), trusted_solution_receipts,
-                                              chinese=chinese, scoped=scoped_local, fixed_fields=fixed_fields)
+            local_target = (resolve_local_task(attempts[-1].get("disclosure"))
                             if local_steps and attempts and not send_full else None)
             direct_first = index == 1 and direct_protocol and (needs_worked_calculation or uses_direct_first(source, protocol_version))
             if direct_first:

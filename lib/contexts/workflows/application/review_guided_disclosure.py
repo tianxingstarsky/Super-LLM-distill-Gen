@@ -8,7 +8,8 @@ from lib.prompts.workflow_guided_answers import (
     GROUNDED_HINT_REVIEW, TUTOR_TASK_ANALYSIS, VERIFIED_OUTCOME_CONTEXT, VERIFIED_STEP_AUTHOR, VERIFIED_STEP_REVIEW, disclosure_author_schema,
     DISCLOSURE_PAIRING, QUOTED_DISCLOSURE, disclosure_draft_decision_schema, disclosure_review_schema, verified_choice_schema,
     verified_choice_review_schema, with_disclosure_pairing, worked_disclosure_schema,
-    PRIVATE_WORKED_REVIEW, PUBLIC_WORKED_WORDING, TUTOR_OBSERVATION_SOURCES, WORKED_DISCLOSURE_AUTHOR, WORKED_DISCLOSURE_REVIEW,
+    PRIVATE_WORKED_REVIEW, PUBLIC_WORKED_WORDING, SIGNED_TASK_AUTHOR, SIGNED_TASK_REVIEW, TUTOR_OBSERVATION_SOURCES,
+    WORKED_DISCLOSURE_AUTHOR, WORKED_DISCLOSURE_REVIEW,
 )
 from ..domain.guided_answers import prior_clue_evidence, read_teacher_submission
 from ..domain.guided_protocol_versions import ATTRIBUTED_TUTORING_VERSIONS
@@ -274,7 +275,7 @@ def author_next_disclosure(request, source, attempt, retained, findings, disclos
                            *, grounded=False, allow_catalog=False, show_outcome=False, paired=False, tried=(),
                            task_analysis=False, quoted_premises=False, strict_author_decisions=False,
                            check_arithmetic=False, bare_answer_operations=False, contextual_operations=False,
-                           immutable_review=False):
+                           immutable_review=False, resolve_local_task=None):
     """Draft and independently review one publishable teacher continuation, with one bounded repair."""
     material, evidence, previous_id = _review_material(source, attempt, retained, findings, disclosed, reference)
     ceiling = material.pop("proposed_next_teacher_disclosure")
@@ -288,16 +289,28 @@ def author_next_disclosure(request, source, attempt, retained, findings, disclos
         reviewer_system += "\n\n" + GROUNDED_HINT_REVIEW
     catalog = source.get("verified_teaching_steps") if allow_catalog else None
     options = eligible_teaching_steps(source, retained, findings, disclosed, tried) if catalog else {}
+    student_tasks = {}
     if options:
         author_system = VERIFIED_STEP_AUTHOR
         material["available_operations"] = [
             {k: step[k] for k in ("id", "kind", "quote", "span", "operation")} for step in options.values()]
+        if resolve_local_task:
+            for step_id in options:
+                # No public wording exists yet. Only the signed operation determines the student task.
+                target = resolve_local_task({"source_step_id": step_id, "source_step_receipt": catalog["receipt_id"],
+                                             "text": ""})
+                if target:
+                    student_tasks[step_id] = {k: target[k] for k in ("request", "submission_fields") if k in target}
     if contextual_operations:
         author_system = WORKED_DISCLOSURE_AUTHOR
         reviewer_system = WORKED_DISCLOSURE_REVIEW
     if immutable_review:
         author_system += "\n\n" + PUBLIC_WORKED_WORDING
         reviewer_system = PRIVATE_WORKED_REVIEW
+    if student_tasks:
+        author_system += "\n\n" + SIGNED_TASK_AUTHOR
+        author_options = [{**step, "student_task": student_tasks[step["id"]]} if step["id"] in student_tasks else step
+                          for step in material["available_operations"]]
     if "prior_behavior_forecast" in material:
         author_system += "\n\n" + TUTOR_OBSERVATION_SOURCES
         reviewer_system += "\n\n" + TUTOR_OBSERVATION_SOURCES
@@ -358,9 +371,10 @@ def author_next_disclosure(request, source, attempt, retained, findings, disclos
             if review_reason := repair.pop("private_reviewer_reason"):
                 repair["reviewer_feedback"] = {"author": "disclosure_reviewer", "reason": review_reason}
         role = "disclosure_rewrite" if revision else "disclosure_draft"
+        author_material = {**material, "available_operations": author_options} if student_tasks else material
         draft = request(role, attempt["attempt"], [
             {"role": "system", "content": author_system},
-            {"role": "user", "content": json.dumps(material, ensure_ascii=False)},
+            {"role": "user", "content": json.dumps(author_material, ensure_ascii=False)},
         ], draft_schema)
         entry["draft_response"] = draft
         if draft["finish_reason"] != "stop":
@@ -438,10 +452,13 @@ def author_next_disclosure(request, source, attempt, retained, findings, disclos
             candidate = {**reference, "source": "teacher_authored", "text": hint}
             packet = {k: v for k, v in material.items() if k != "requested_revision"}
             packet["proposed_next_teacher_disclosure"] = {"kind": reference["kind"], "bridge": bridge, "hint": hint}
+            review_instruction = reviewer_system
             if applied is not None:
-                packet["proposed_next_teacher_disclosure"]["applied_operation"] = {
-                    k: applied[k] for k in ("id", "operation", "quote", "span")
-                }
+                selected = {k: applied[k] for k in ("id", "operation", "quote", "span")}
+                if applied["id"] in student_tasks:
+                    selected["student_task"] = student_tasks[applied["id"]]
+                    review_instruction += "\n\n" + SIGNED_TASK_REVIEW
+                packet["proposed_next_teacher_disclosure"]["applied_operation"] = selected
             if grounded:
                 packet["proposed_next_teacher_disclosure"]["question_quote"] = proposal["question_quote"]
             reviewer = "disclosure_recheck" if revision else "disclosure"
@@ -452,7 +469,7 @@ def author_next_disclosure(request, source, attempt, retained, findings, disclos
                                               "student_attempt": attempt["attempt"]}
                 schema = with_disclosure_pairing(schema)
             response = request(reviewer, attempt["attempt"], [
-                {"role": "system", "content": reviewer_system},
+                {"role": "system", "content": review_instruction},
                 {"role": "user", "content": json.dumps(packet, ensure_ascii=False)},
             ], schema)
             entry["review_response"] = response
@@ -513,7 +530,7 @@ def _checked_disclosure_issue(entry, question):
 def review_or_recommend_disclosure(request, source, attempt, retained, findings, disclosed, reference,
                                    *, teacher_experience, tried, task_analysis=False, quoted_premises=False,
                                    strict_author_decisions=False, check_arithmetic=False, bare_answer_operations=False,
-                                   contextual_operations=False, immutable_review=False):
+                                   contextual_operations=False, immutable_review=False, resolve_local_task=None):
     """Try each remaining externally verified possibility at most once, still requiring independent release."""
     if attempt.get("recommend_verified_operation") and not contextual_operations:
         history = attempt["disclosure_work"] = []
@@ -524,7 +541,7 @@ def review_or_recommend_disclosure(request, source, attempt, retained, findings,
             grounded=True, allow_catalog=True, show_outcome=True, paired=True, tried=tried, task_analysis=task_analysis,
             quoted_premises=quoted_premises, strict_author_decisions=strict_author_decisions, check_arithmetic=check_arithmetic,
             bare_answer_operations=bare_answer_operations, contextual_operations=contextual_operations,
-            immutable_review=immutable_review,
+            immutable_review=immutable_review, resolve_local_task=resolve_local_task,
         )
         history = attempt["disclosure_work"]
         if contextual_operations:

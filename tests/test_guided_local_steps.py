@@ -1,9 +1,11 @@
 import json
+from functools import partial
 
 import pytest
 from jsonschema import Draft202012Validator
 
 from lib.contexts.workflows.application.generate_guided_answer import GenerateGuidedAnswer
+from lib.contexts.workflows.application.review_guided_disclosure import review_or_recommend_disclosure
 from lib.contexts.workflows.domain.experience_evolution import digest
 from lib.contexts.workflows.domain.guided_answers import validate_source
 from lib.contexts.workflows.domain.guided_behavior_prediction import (
@@ -35,6 +37,72 @@ def signed_source():
     receipt = verified_steps_digest(row["id"], question, row["gold"], steps)
     row["verified_teaching_steps"] = {"receipt_id": receipt, "steps": steps}
     return validate_source(row, allow_verified_teaching_steps=True, trusted_step_receipts={receipt}), receipt
+
+
+@pytest.mark.parametrize("decision,trust,repair", [
+    ("apply:fixed-position", True, False), ("apply:fixed-position", True, True), ("apply:permitted-pair", True, False),
+    ("offer", True, False), ("apply:fixed-position", False, False),
+])
+def test_first_teacher_and_reviewer_receive_the_public_student_task_for_the_selected_operation(decision, trust, repair):
+    source, receipt = signed_source()
+    resolve = partial(local_step_target, source, trusted={receipt} if trust else set(),
+                      chinese=False, scoped=True, fixed_fields=True)
+    steps = source["verified_teaching_steps"]["steps"]
+    step = steps[1] if decision == "apply:permitted-pair" else steps[0]
+    calls = {}
+
+    def request(role, index, messages, schema):
+        assert index == 1
+        packet = json.loads(messages[-1]["content"])
+        calls[role] = packet
+        if role in ("disclosure_draft", "disclosure_rewrite"):
+            hint = ("List all triples that might fit the neighboring positions." if repair and role == "disclosure_draft"
+                    else "Use the order in the premise to distinguish the entries.")
+            response = dict(decision=decision, question_quote=step["quote"], bridge="Start with the quoted constraint.",
+                            hint=hint, reason="Grounded in the task.")
+        else:
+            assert role in ("disclosure", "disclosure_recheck")
+            response = dict(decision="release", citations=[dict(evidence_id="question", quote=step["quote"])],
+                            pairing=dict(student_fit=not (repair and role == "disclosure"), evidence_support=True,
+                                         history_fit="first"),
+                            reason="The ordered entries refer to the quoted relationship.")
+        return dict(content=json.dumps(response), finish_reason="stop")
+
+    attempt = dict(attempt=1, student={"content": "7"}, check={"format_ok": True, "answer_matches": False},
+                   derivation_available=False)
+    reference = dict(ordinal=1, kind="operation", text="", replaces_from="final_answer")
+    hint, issue = review_or_recommend_disclosure(request, source, attempt, [], {}, [], reference, teacher_experience="",
+                                                tried=set(), quoted_premises=True, contextual_operations=True,
+                                                immutable_review=True, resolve_local_task=resolve)
+    assert issue is None
+    assert list(calls) == (["disclosure_draft", "disclosure", "disclosure_rewrite", "disclosure_recheck"] if repair
+                           else ["disclosure_draft", "disclosure"])
+    options = {item["id"]: item for item in calls["disclosure_draft"]["available_operations"]}
+    reviewed = calls["disclosure"]["proposed_next_teacher_disclosure"]
+    if repair:
+        assert "List all triples" in reviewed["public_text"] and "List all triples" not in hint["text"]
+        assert calls["disclosure_recheck"]["proposed_next_teacher_disclosure"]["applied_operation"] == reviewed["applied_operation"]
+    assert all("student_task" not in item for item in calls["disclosure"]["available_operations"])
+    if not trust:
+        assert all("student_task" not in item for item in options.values())
+        assert "student_task" not in reviewed["applied_operation"]
+        return
+    fixed = options["fixed-position"]["student_task"]
+    assert set(fixed) == {"request", "submission_fields"}
+    assert fixed["submission_fields"] == {"position": "integer", "former_bit": "integer", "current_bit": "integer"}
+    assert set(options["permitted-pair"]["student_task"]) == {"request"}
+    if decision == "offer":
+        assert "applied_operation" not in reviewed and "source_step_id" not in hint
+        return
+    target = resolve(hint)
+    selected = reviewed["applied_operation"]["student_task"]
+    assert selected == options[step["id"]]["student_task"]
+    assert selected["request"] == json.loads(scoped_local_messages(source, target, "", False)[1]["content"])["current_local_task"]
+    values = local_submission_schema(target)["anyOf"][0]["properties"]["values"]
+    if "submission_fields" in selected:
+        assert list(selected["submission_fields"]) == values["required"]
+    else:
+        assert values["type"] == "array"
 
 
 def test_public_source_choices_and_unknown_outcome_preserve_legacy_forecast_semantics():
