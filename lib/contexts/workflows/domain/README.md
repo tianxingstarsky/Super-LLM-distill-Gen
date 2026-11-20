@@ -213,3 +213,5 @@
 `guided_teacher_delivery.py` 处理教师的正式交付。结论和按原题要求呈现的解法属于公开答案。片段编号、依据不足的原因以及作者身份留在回执中。规则由 `application/compose_guided_final_answer.py` 调用。
 
 4.7 正式交付前会对照本次提供给教师的全部片段编号，检查公开解释和结论。用户题面已经出现的编号可以引用。教师引入私有编号时，校验返回 `teacher_final_contains_private_evidence_id`，原始响应保存在收据中。已冻结的 4.4–4.6 沿用原规则。相关回归见 `tests/test_guided_teacher_delivery.py`。
+
+试验协议 4.10.1 支持经过独立签发的前向规则证明与开放世界的缺失前提说明。`certified_rule_prefixes` 读取题目和完整证明，核对规则文本及已知前提，保留程序选出的原文位置、前置步骤及整解收据。最后一条规则可先给出适用前提，结论留给学生推出。未识别的证明格式沿用原有辅导路径。

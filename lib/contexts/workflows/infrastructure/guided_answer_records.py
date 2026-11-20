@@ -21,7 +21,7 @@ from ..domain.experience_evolution import digest
 from ..domain.guided_answers import validate_source
 from ..domain.guided_disclosure import RENDERED_CONTINUATION_VERSIONS, render_student_continuation
 from ..domain.guided_teacher_delivery import (
-    CHECKED_TUTOR_VERSIONS, EVIDENCED_PROGRESS_VERSIONS, GUIDED_DELIVERY_VERSIONS, SOLVER_FINAL_VERSIONS,
+    CALCULATION_PLAN_VERSIONS, CHECKED_TUTOR_VERSIONS, EVIDENCED_PROGRESS_VERSIONS, GUIDED_DELIVERY_VERSIONS, SOLVER_FINAL_VERSIONS,
     TRUNCATED_TUTORING_VERSIONS, requested_delivery, uses_direct_first,
 )
 from ..domain.guided_final_experience import adopted_final_teacher_text
@@ -68,7 +68,7 @@ def inputs(path, protocol_version=VERSION, trusted_step_receipts=frozenset()):
                 yield validate_source(json.loads(line), allow_answer_requirement=protocol_version in FIRST_ANSWER_VERSIONS,
                                       allow_task_system=protocol_version in FINAL_CONTINUATION_VERSIONS,
                                       allow_direct_syntax=protocol_version in DIRECT_SYNTAX_VERSIONS,
-                                      allow_calculation_plan=protocol_version == "4.10.0", **verified_options)
+                                      allow_calculation_plan=protocol_version in CALCULATION_PLAN_VERSIONS, **verified_options)
 
 
 def verified_step_registry(output, receipt_path, frozen_config):
@@ -409,15 +409,15 @@ def run_guided_cases(
         )
         if template_version in TEACHER_DISCLOSURE_VERSIONS:
             config["until_correct"] = until_correct
-        if (template_version == "4.10.0"
+        if (template_version in CALCULATION_PLAN_VERSIONS
                 and (frozen_config is None or "draft_candidate_observation" in frozen_config)):
             config["draft_candidate_observation"] = "marked-student-draft/v1"
         if registry:
             config["verified_step_registry_id"] = digest(registry)
-            if (template_version == "4.10.0"
+            if (template_version in CALCULATION_PLAN_VERSIONS
                     and (frozen_config is None or "student_calculation_format" in frozen_config)):
                 config["student_calculation_format"] = EXPRESSION_INPUT
-            if (template_version == "4.10.0" and stronger
+            if (template_version in CALCULATION_PLAN_VERSIONS and stronger
                     and (frozen_config is None or "strong_calculation_readout" in frozen_config)):
                 config["strong_calculation_readout"] = "two-verified-mismatches/v1"
             if (template_version in CHECKED_TUTOR_VERSIONS
@@ -467,7 +467,7 @@ def run_guided_cases(
             comparable = config["endpoints"]
             # A new optional reader has no historical calls. Keep every original role and
             # capability identical, then authenticate each reused request against its receipt.
-            if (template_version == "4.10.0" and prior["template_version"] == template_version
+            if (template_version in CALCULATION_PLAN_VERSIONS and prior["template_version"] == template_version
                     and set(prior_endpoints) == {"student", "coach"}
                     and set(comparable) == {"student", "coach", "continuation"}):
                 comparable = {role: comparable[role] for role in prior_endpoints}
@@ -553,7 +553,7 @@ def run_guided_cases(
                 first_direct = role == "student" and index == 1 and uses_direct_first(source, template_version)
                 final_grammar = native_final and (template_version not in SOLVER_FINAL_VERSIONS
                                                   or requested_delivery(source) == "final_only")
-                calculation_probe = (template_version == "4.10.0" and role == "student" and index == 1
+                calculation_probe = (template_version in CALCULATION_PLAN_VERSIONS and role == "student" and index == 1
                                      and source.get("verified_calculation_plan") and requested_delivery(source) == "worked_solution")
                 if role in {"verified_answer", "verified_answer_retry", "verified_strong_answer"} or calculation_probe:
                     payload["grammar"] = DIRECT_ANSWER_GRAMMARS["keyed_rational"]
@@ -707,7 +707,7 @@ def run_guided_cases(
                     expression_input=config.get("student_calculation_format") == EXPRESSION_INPUT,
                     observe_draft_candidates="draft_candidate_observation" in config,
                     allow_strong_calculation_readout="strong_calculation_readout" in config,
-                    expected_first_model=capabilities["student"]["model"] if template_version == "4.10.0" else None,
+                    expected_first_model=capabilities["student"]["model"] if template_version in CALCULATION_PLAN_VERSIONS else None,
                     **({"continuation_model": stronger["model"] if stronger else None,
                         "trusted_solution_receipts": trusted}
                        if template_version in EVIDENCED_PROGRESS_VERSIONS else {}),
@@ -888,7 +888,7 @@ def export(input_path, output, *, selected=None):
                 historical_origin = None
                 for cp in folder.glob("[0-9]*-*.json"):
                     event = read(cp)
-                    if manifest["template_version"] == "4.10.0" and event["status"] == "complete":
+                    if manifest["template_version"] in CALCULATION_PLAN_VERSIONS and event["status"] == "complete":
                         group = "reused" if event.get("origin") else "new"
                         roles = usage_by_role.setdefault(group, {})
                         totals = roles.setdefault(event["role"], {"responses": 0, "usage_unreported": 0,
@@ -1008,7 +1008,7 @@ def export(input_path, output, *, selected=None):
                         target_info["training_target_sha256"] = digest(target)
                         objective = target["guided_training_target"]["objective"]
                         target_counts[objective] = target_counts.get(objective, 0) + 1
-                        if manifest["template_version"] == "4.10.0":
+                        if manifest["template_version"] in CALCULATION_PLAN_VERSIONS:
                             origin = target["guided_training_target"]
                             basis = origin["evidence_basis"]
                             evidence_counts[basis] = evidence_counts.get(basis, 0) + 1
@@ -1033,8 +1033,8 @@ def export(input_path, output, *, selected=None):
                     for work in attempt.get("disclosure_work", []):
                         published = bool(work.get("validated_citations") and attempt.get("disclosure"))
                         if paired_protocol:
-                            published = bool(delivery and work.get("review_checkpoint")
-                                             == attempt["disclosure"]["review_checkpoint"])
+                            reviewed = work.get("review_checkpoint")
+                            published = bool(delivery and reviewed and reviewed == attempt["disclosure"].get("review_checkpoint"))
                         emit("teacher_feedback", {
                             "id": case["id"], "case_archive": (folder / "case.json").relative_to(output).as_posix(),
                             "attempt": attempt["attempt"], "revision": work["revision"],
@@ -1082,13 +1082,13 @@ def export(input_path, output, *, selected=None):
         "counts": counts,
         **({"accepted_by_route": accepted_routes} if manifest["template_version"] in FIRST_ANSWER_VERSIONS else {}),
         "model_calls": calls,
-        **({"usage_by_role": usage_by_role} if manifest["template_version"] == "4.10.0" else {}),
+        **({"usage_by_role": usage_by_role} if manifest["template_version"] in CALCULATION_PLAN_VERSIONS else {}),
         **({"training_targets": {"schema": GUIDED_TARGET_SCHEMA, "file": GUIDED_TARGET_FILE,
                                  "by_objective": target_counts, "held_by_reason": target_holds,
                                  **({"by_evidence_basis": evidence_counts,
                                      "calculation_operations_by_origin": calculation_operations,
                                      "calculation_readouts_by_role": calculation_readers}
-                                    if manifest["template_version"] == "4.10.0" else {})}}
+                                    if manifest["template_version"] in CALCULATION_PLAN_VERSIONS else {})}}
            if project_targets else {}),
         **({"accepted_after_full_disclosure": disclosed_outcomes} if manifest["template_version"] in EVIDENCED_PROGRESS_VERSIONS else {}),
         **({"historical_first_outcomes": historical_outcomes} if "historical_first" in manifest else {}),

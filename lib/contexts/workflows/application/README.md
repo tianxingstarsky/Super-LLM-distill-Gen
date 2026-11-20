@@ -207,3 +207,5 @@ python -m lib.guided_experience --adopt-final-edition EDITION_ID --library LIB -
 第二步沿用 Google ReasoningBank 的提炼与调用收据。读完候选版本，再用它的 ID 执行第三步；采用只读取个人库中的不可变版本，无须模型或嵌入。将 `experience.json` 作为 `lib.guided_answers --experience` 的参数，选定的经验只进入教师交付正式答案的 system 消息。数值型题目可将表内 `kind` 设为 `wrong_final_value` 来重放“明确数值不同”的负例判定。键值相等时仍须另行检查解法。其他可信校验器可通过 `learn_guided_experience(..., replay_verifier=...)` 注入；检查器须对当前题和实际正文重新求值，并返回对应的题号、正文 SHA-256、检查器名称和版本摘要。
 
 `GenerateGuidedAnswer` 在 4.2.1 中通过 `repair_guided_student_evidence.py` 区分学生的推导错误和审查员的证据引用错误。审查引用自身、尚未出现的步骤或无效编号时，只向审查员提交一次修正请求。原始判决、引用错误、修正响应与对应学生轮次均保存。审查员无法证实这些发现时，任务进入 `awaiting_guidance`，可在原学生稿上继续工作。只有通过推导审查并核对金标的稿件才能进入正式答复阶段。
+
+使用 `--protocol-version 4.10.1 --until-correct` 验证规则逻辑题时，教师未能发布下一条提示且本题有独立签发的完整规则证明，`GenerateGuidedAnswer` 会按原依赖顺序，每次只显示一个有依据的步骤。每次都先让弱学生作答并复查。后续若要交给更强模型，仍须先有弱学生看过完整依据后未解决的可比较回执。出库沿用末答、格式及整段学生推导检查，证明实际出示过的题归有辅导的修正练习。

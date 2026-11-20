@@ -18,10 +18,10 @@ from ..domain.guided_student_evidence import (
     checked_derivation_conflict, checked_student_approaches, partial_review_evidence, verified_student_stage,
 )
 from ..domain.guided_teacher_delivery import (
-    CHECKED_TUTOR_VERSIONS, EVIDENCED_PROGRESS_VERSIONS, SOLVER_FINAL_VERSIONS, TEACHER_FINAL_VERSIONS, TRUNCATED_TUTORING_VERSIONS,
+    CALCULATION_PLAN_VERSIONS, CHECKED_TUTOR_VERSIONS, EVIDENCED_PROGRESS_VERSIONS, SOLVER_FINAL_VERSIONS, TEACHER_FINAL_VERSIONS, TRUNCATED_TUTORING_VERSIONS,
     inspect_solver_delivery, requested_delivery, uses_direct_first,
 )
-from ..domain.guided_teaching_steps import certified_complete_disclosure
+from ..domain.guided_teaching_steps import certified_complete_disclosure, certified_rule_prefixes
 
 from ..domain.guided_answers import (
     assemble,
@@ -130,7 +130,7 @@ class GenerateGuidedAnswer:
                     "4.5.0": "v4.5", "4.5.1": "v4.5.1", "4.6.0": "v4.6", "4.7.0": "v4.7",
                     "4.7.1": "v4.7.1", "4.8.0": "v4.8", "4.8.1": "v4.8.1",
                     "4.8.2": "v4.8.2", "4.8.3": "v4.8.3", "4.9.0": "v4.9", "4.9.1": "v4.9.1",
-                    "4.10.0": "v4.10.0"}[protocol_version]
+                    "4.10.0": "v4.10.0", "4.10.1": "v4.10.1"}[protocol_version]
         tutor_instruction = SINGLE_DECISION_REVIEW if single_decision else ANCHORED_REVIEW if anchored else COACH
         if grounded:
             tutor_instruction += "\n\n" + GROUNDED_STUDENT_REVIEW
@@ -193,11 +193,13 @@ class GenerateGuidedAnswer:
         training_reasoning = ""
         formal_history = []
         calculation_tutoring = None
-        plan = source.get("verified_calculation_plan") if protocol_version == "4.10.0" else None
+        plan = source.get("verified_calculation_plan") if protocol_version in CALCULATION_PLAN_VERSIONS else None
         if plan and plan["receipt_id"] not in trusted_solution_receipts:
             raise ValueError("calculation teaching requires its independent plan receipt")
         needs_worked_calculation = bool(plan and require_explanation)
         full_reference = certified_complete_disclosure(source, trusted_solution_receipts) if evidenced_progress else None
+        proof_steps = certified_rule_prefixes(question, full_reference) if protocol_version == "4.10.1" and until_correct else []
+        proof_position = None
         send_full = False
         next_solver = "student"
         delivery_log = []
@@ -369,7 +371,7 @@ class GenerateGuidedAnswer:
             if repeated is not None:
                 check.update(format_ok=False, issue="repeated_retained_segment")
             attempt["check"] = check
-            if protocol_version == "4.10.0" and observe_draft_candidates and not check["format_ok"]:
+            if protocol_version in CALCULATION_PLAN_VERSIONS and observe_draft_candidates and not check["format_ok"]:
                 draft_candidate = latest_marked_draft_candidate(suffix)
                 if draft_candidate:
                     attempt["marked_draft_candidate"] = draft_candidate
@@ -837,6 +839,8 @@ class GenerateGuidedAnswer:
                 send_full = True
                 attempt_limit = max(attempt_limit, index + 1)
                 continue
+            if proof_position is not None:
+                attempt_limit = max(attempt_limit, index + 1)
             if until_correct and index == attempt_limit:
                 if (evidenced_progress and not attempt["verified_stage"]["comparable"]
                         and not attempt["verified_stage"]["student_advanced"]):
@@ -882,8 +886,22 @@ class GenerateGuidedAnswer:
                     "replaces_from": version["first_unresolved"],
                 }
                 if review_disclosures:
-                    disclosure, issue = assess_hint(
-                        self.request, source, attempt, active, findings, disclosed, disclosure)
+                    if proof_position is None:
+                        proposed, issue = assess_hint(
+                            self.request, source, attempt, active, findings, disclosed, disclosure)
+                        if proposed is None and proof_steps:
+                            proof_position = 0
+                            attempt["proof_fallback_reason"] = issue
+                        else:
+                            disclosure = proposed
+                    if proof_position is not None:
+                        if proof_position == len(proof_steps):
+                            send_full = True
+                            attempt_limit = max(attempt_limit, index + 1)
+                            continue
+                        disclosure = {**disclosure, **proof_steps[proof_position]}
+                        proof_position += 1
+                        attempt_limit = max(attempt_limit, index + 1)
                     if disclosure is None:
                         if (full_reference and disclosed and issue in {"teacher_needs_more_evidence",
                                 "verified_teaching_operations_exhausted", "teacher_disclosure_withheld",

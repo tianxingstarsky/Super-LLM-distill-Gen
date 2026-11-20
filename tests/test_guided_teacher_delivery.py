@@ -276,3 +276,17 @@ def test_native_q5_sampling_and_legacy_request_replay():
     assert ep.sampling_profile == "qwen3.5-9b"
     assert current["temperature"] == 1.0 and current["presence_penalty"] == 1.5
     assert current["chat_template_kwargs"] == {"enable_thinking": True}
+def test_signed_open_world_proof_reveals_missing_branches_before_the_verdict():
+    from lib.contexts.workflows.domain.guided_teaching_steps import certified_rule_prefixes
+
+    question = "Fiona is white. If Fiona is green and white then Fiona is kind.\n\nClaim: Fiona is kind."
+    proof = ("Neither “Fiona is kind” nor “Fiona is not kind” is stated. "
+             "To obtain “Fiona is kind” from “Fiona is green” and “Fiona is white”, the missing premise is “Fiona is green”. "
+             "No rule concludes “Fiona is not kind”. Neither direction follows under the given rules.")
+    source = {"id":"fiona", "question":question, "gold":{"kind":"exact","value":"Unknown"}, "source_reasoning":proof}
+    reference = certified_complete_disclosure(source, {complete_solution_digest(source)})
+    steps = certified_rule_prefixes(question, reference)
+    assert len(steps) == 3
+    assert all(proof[s["source_span"][0]:s["source_span"][1]] == s["text"] for s in steps)
+    assert "Neither direction follows" not in "".join(s["text"] for s in steps)
+    assert not certified_rule_prefixes(question, {**reference, "worked_solution":"Unstructured proof."})

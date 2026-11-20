@@ -26,6 +26,60 @@ def certified_complete_disclosure(source, trusted_receipts):
     return {"id": receipt, "worked_solution": proof, "answer": key["value"]}
 
 
+def certified_rule_prefixes(question, reference):
+    """Select complete, ordered inferences from an attested rule proof. Keep its verdict for later."""
+    if not reference or "\n\nClaim:" not in question:
+        return []
+    theory, _, _ = question.partition("\n\nClaim:")
+    statements = {s.strip().casefold(): s.strip() for s in theory.strip().rstrip(".").split(". ")}
+    proof = reference["worked_solution"]
+    sentence = re.compile(r"[^.\n]+\.")
+    sentences = list(sentence.finditer(proof))
+    # Abbreviations, fragments, and unfamiliar proof formats require a tutor.
+    if len(sentences) < 2 or sentence.sub("", proof).strip():
+        return []
+    evidence = []
+    derived = {}
+    for pos, match in enumerate(sentences):
+        text = match.group().strip()
+        start = match.end() - len(text)
+        end = match.end()
+        step_id = f"proof-{len(evidence) + 1}"
+        dependencies = []
+        question_evidence = []
+        if text.startswith("With "):
+            inference = re.fullmatch(r"With (.+), the rule “([^”]+)” gives “([^”]+)”\.", text)
+            if not inference or inference[2].casefold() not in statements:
+                return []
+            premises = re.fullmatch(r"“[^”]+”(?: and “[^”]+”)*", inference[1])
+            needed = [s.casefold() for s in re.findall("“([^”]+)”", inference[1])]
+            if not premises or any(s not in statements and s not in derived for s in needed):
+                return []
+            question_evidence = [statements[s] for s in needed if s in statements] + [statements[inference[2].casefold()]]
+            dependencies = list(dict.fromkeys(derived[s] for s in needed if s not in statements))
+            derived[inference[3].casefold()] = step_id
+            if pos == len(sentences) - 1 or (pos == len(sentences) - 2 and
+                    sentences[-1].group().strip() == "This establishes the opposite of the claim."):
+                # The final implication is still the learner's to draw. Cite its
+                # checked premises and rule without publishing their conclusion.
+                end = start + inference.end(2) + 1
+                text = f"Apply “{inference[2]}” using {inference[1]}."
+        elif text == "This establishes the opposite of the claim.":
+            return evidence if match == sentences[-1] else []
+        elif text == "Neither direction follows under the given rules.":
+            return evidence if match == sentences[-1] else []
+        elif not (proof.startswith("Neither “") and re.fullmatch(
+            r"Neither “[^”]+” nor “[^”]+” is stated\.|No rule concludes “[^”]+”\.|"
+            r"To obtain “[^”]+” from .+, the missing premise(?:s are| is) .+\.", text
+        )):
+            return []
+        evidence.append({"id": step_id, "source": "verified_solution_prefix",
+                         "kind": "inference", "text": text, "reference_receipt": reference["id"],
+                         "source_span": [start, end], "question_evidence": question_evidence,
+                         "depends_on": dependencies})
+    return evidence
+
+
 def verified_steps_digest(source_id, question, gold, steps):
     identity = {"source_id": source_id, "question": question, "gold": gold, "steps": steps}
     encoded = json.dumps(identity, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)

@@ -4,12 +4,12 @@ import json
 
 from .guided_answers import assemble, contains_chat_control, read_teacher_submission
 from .guided_student_calculations import asserted_arithmetic_errors
-from .guided_teaching_steps import certified_complete_disclosure
+from .guided_teaching_steps import certified_complete_disclosure, certified_rule_prefixes
 
 
 GUIDED_TARGET_FILE = "training-targets.jsonl"
 GUIDED_TARGET_SCHEMA = "guided-training-target/v1"
-GUIDED_TARGET_VERSIONS = frozenset({"4.9.1", "4.10.0"})
+GUIDED_TARGET_VERSIONS = frozenset({"4.9.1", "4.10.0", "4.10.1"})
 
 
 class GuidedTargetHeld(ValueError):
@@ -146,17 +146,32 @@ def guided_training_target(case, case_archive, trusted_solution_receipts, *, cal
         derivation, spans = _reviewed_segments(case)
         full = [a["received_complete_disclosure"] for a in attempts if "received_complete_disclosure" in a]
         continuation = case.get("continuation_provenance")
-        if full or continuation:
+        staged = [h for h in case["disclosures"] if h.get("source") == "verified_solution_prefix"]
+        reference = None
+        if staged or full or continuation:
             reference = certified_complete_disclosure(case, trusted_solution_receipts)
+        if staged:
+            expected = certified_rule_prefixes(question, reference)
+            if (case.get("protocol") != "guided-draft-snapshot/v4.10.1" or len(staged) > len(expected)
+                    or any(any(actual.get(k) != v for k, v in planned.items())
+                           for actual, planned in zip(staged, expected))):
+                raise ValueError("published proof prefix differs from its attested order and source")
+            provenance.update(reference_receipt=reference["id"], published_proof_spans=[s["source_span"] for s in staged])
+        if full or continuation:
             if (not reference or full != [reference] or not continuation
                     or continuation.get("reference_answer_disclosed") is not True
                     or continuation["complete_disclosure_id"] != reference["id"]):
                 raise ValueError("teacher demonstration requires the bound verified reference")
-            objective = "teacher_demonstration"
-            target["reasoning_content"] = reference["worked_solution"]
-            provenance.update(reasoning_origin="verified_source_solution", reference_receipt=reference["id"],
-                              reference_author=case["source"].get("reasoning_author"))
-        else:
+            if staged:
+                if " ".join(derivation.split()) == " ".join(reference["worked_solution"].split()):
+                    raise GuidedTargetHeld("solver_only_repeated_the_disclosed_proof")
+                provenance["reference_answer_disclosed"] = True
+            else:
+                objective = "teacher_demonstration"
+                target["reasoning_content"] = reference["worked_solution"]
+                provenance.update(reasoning_origin="verified_source_solution", reference_receipt=reference["id"],
+                                  reference_author=case["source"].get("reasoning_author"))
+        if staged or not (full or continuation):
             objective = "independent_solution" if independent else "guided_correction"
             target["reasoning_content"] = derivation
             provenance.update(reasoning_origin="reviewed_student_spans", reasoning_spans=spans)
@@ -164,10 +179,13 @@ def guided_training_target(case, case_archive, trusted_solution_receipts, *, cal
                 language = str(case["source"].get("language") or "").lower()
                 chinese = language.startswith("zh") if language else any("\u4e00" <= ch <= "\u9fff" for ch in question)
                 question = _correction_prompt(question, attempts[:-1], chinese)
+                if full:
+                    label = "作答前已给出的完整辅导内容" if chinese else "Complete guidance seen before answering"
+                    question += "\n\n" + label + "\n" + reference["worked_solution"] + "\n" + reference["answer"]
     if any(contains_chat_control(text) for text in (question, target.get("reasoning_content", ""), answer)):
         raise GuidedTargetHeld("chat_delimiter_in_training_text")
     messages = [{"role": "system", "content": case["task_system"]}] if case.get("task_system") else []
-    if case.get("protocol") == "guided-draft-snapshot/v4.10.0":
+    if case.get("protocol") in {"guided-draft-snapshot/v4.10.0", "guided-draft-snapshot/v4.10.1"}:
         provenance["evidence_basis"] = {"independent_answer": "independent_answer_key",
                                         "teacher_demonstration": "verified_source_solution"}.get(
                                             objective, "answer_key_and_tutor_review")

@@ -12,6 +12,88 @@ from lib.contexts.workflows.infrastructure.guided_answer_records import run_guid
 from lib.contexts.workflows.infrastructure.guided_llama import DIRECT_ANSWER_GRAMMARS, GuidedChatEndpoint
 
 
+@pytest.mark.parametrize("version,certified", [("4.10.0", True), ("4.10.1", False), ("4.10.1", True)])
+def test_withheld_first_hint_can_use_signed_rule_steps_before_handoff(tmp_path, monkeypatch, version, certified):
+    question = ("Ann is kind. All kind things are blue. All blue things are round.\n\n"
+                "Claim: Ann is round.\nShow why, then give the verdict as True, False or Unknown.")
+    proof = ("With “Ann is kind”, the rule “All kind things are blue” gives “Ann is blue”.\n"
+             "With “Ann is blue”, the rule “All blue things are round” gives “Ann is round”.")
+    source = validate_source(dict(id="round", question=question, gold={"kind":"exact","value":"True"},
+                                  source_reasoning=proof, answer_requirement="worked_solution"))
+    receipt = complete_solution_digest(source)
+    calls = []
+    wrong = "I cannot establish the claim.\nFinal answer: False"
+    solved = "Kindness puts Ann among the blue things, all of which are round.\nFinal answer: True"
+
+    def request(role, index, messages, schema):
+        calls.append((role, index, messages))
+        if role == "student":
+            response = wrong
+        elif role == "disclosure_draft":
+            assert index == 1
+            response = dict(decision="insufficient", question_quote="", bridge="", hint="", reason="No new grounded hint.")
+        elif role == "coach":
+            response = dict(decision="supported" if index == 5 else f"revise:a{index}.s1",
+                            diagnosis="Check the two implications.", reusable=[], independent_approaches=[])
+            if "anchored_contradiction" in schema["properties"]:
+                response["anchored_contradiction"] = []
+        else:
+            assert role in {"strong_continuation", "strong_final_answer"} and index == 5
+            response = solved
+        return {"model":"strong" if role.startswith("strong") else "weak" if role=="student" else "tutor",
+                "finish_reason":"stop","reasoning_content":"",
+                "content":response if isinstance(response,str) else json.dumps(response)}
+
+    script = [("student",1),("coach",1),("disclosure_draft",1),
+              ("student",2),("coach",2),("student",3),("coach",3),("student",4),("coach",4),
+              ("strong_continuation",5),("coach",5)]
+
+    def serve(ep, url, body=None):
+        if url.endswith("/slots"):
+            return [{"n_ctx":98304}]
+        if url.endswith("/v1/models"):
+            return {"data":[{"id":ep.model}]}
+        if url.endswith("/apply-template"):
+            return {"prompt":"\n".join(m["content"] for m in body["messages"])+"\nAssistant\n<think>\n"}
+        if url.endswith("/tokenize"):
+            return {"tokens":list(body["content"].encode())}
+        if url.endswith("/completion"):
+            assert ep.model=="strong"
+            return {"content":solved, "stop_type":"eos", "tokens_evaluated":len(body["prompt"]), "tokens_predicted":12}
+        assert url.endswith("/v1/chat/completions")
+        role,index=script[len(calls)]
+        reply=request(role,index,body["messages"],body.get("response_format",{}).get("json_schema",{}).get("schema",{}))
+        assert ep.model==("weak" if role=="student" else "strong")
+        return {"model":ep.model, "choices":[{"message":{"content":reply["content"]},"finish_reason":"stop"}]}
+
+    monkeypatch.setattr(GuidedChatEndpoint, "http", serve)
+    input_file, registry, output = tmp_path/"input.jsonl", tmp_path/"proof.json", tmp_path/"run"
+    input_file.write_text(json.dumps(source), encoding="utf8")
+    registry.write_text(json.dumps({"schema":"guided-teaching-verification/v1","receipts":[receipt]}), encoding="utf8")
+    endpoints={"student":endpoint("weak",8121),"coach":endpoint("strong",8122),"continuation":endpoint("strong",8122)}
+    run_guided_cases(input_file,output,endpoints,{"version":"test"},3,protocol_version=version,until_correct=True,
+                     verified_step_receipts=registry if certified else None)
+    result=json.loads(next((output/"cases").glob("*/case.json")).read_bytes())
+    if not certified or version == "4.10.0":
+        assert result["verification"]["issue"] == "teacher_needs_more_evidence" and not result["disclosures"]
+        return
+    assert result["status"] == "accepted", result["verification"]
+    steps=result["disclosures"]
+    assert [s["reference_receipt"] for s in steps]==[receipt,receipt]
+    assert [s["depends_on"] for s in steps]==[[],[steps[0]["id"]]]
+    assert steps[0]["text"]==proof.splitlines()[0] and "Ann is round" not in steps[1]["text"]
+    inputs={(r,n):ms for r,n,ms in calls}
+    assert steps[0]["text"] in inputs["student",2][-1]["content"]
+    assert all(s["text"] in inputs["student",3][-1]["content"] for s in steps)
+    assert inputs["strong_continuation",5] == inputs["student",4]
+    assert json.loads(inputs["student",4][-1]["content"].split("\n",1)[1])["complete_disclosure"]["worked_solution"] == proof
+    target=json.loads((output/"training-targets.jsonl").read_bytes())
+    assert not json.loads((output/"teacher_feedback.jsonl").read_bytes())["published"]
+    assert target["messages"][-1]["reasoning_content"] == solved.splitlines()[0]
+    assert target["guided_training_target"]["objective"]=="guided_correction"
+    assert target["guided_training_target"]["reference_answer_disclosed"] is True
+
+
 def endpoint(model, port):
     return GuidedChatEndpoint(f"http://localhost:{port}/v1", model, None, 32768, local=True, context=98304,
                               pool=SimpleNamespace(acquire=nullcontext))
