@@ -566,6 +566,22 @@ def test_three_round_http_history_uses_only_published_clues_and_freezes_resume(
         matching = generate_guided_cases(path, tmp_path / "all-matching", **args, reuse_matching_from=root)
         assert matching["model_calls"]["new_completed"] == 0 and matching["model_calls"]["replayed_matching"] == 6
         assert matching["counts"]["accepted"] == 1 and len(calls) == 6
+        parent = tmp_path / "all-matching"
+        missing = generate_guided_cases(path, tmp_path / "missing-original", **args, reuse_matching_from=parent)
+        assert missing["counts"]["interrupted"] == 1 and len(calls) == 6
+        verified = tmp_path / "verified-ancestry"
+        result = generate_guided_cases(path, verified, **args, reuse_matching_from=parent, reuse_original_runs=[root])
+        assert result["counts"]["accepted"] == 1 and result["model_calls"]["replayed_matching"] == 6 and len(calls) == 6
+        deeper = generate_guided_cases(path, tmp_path / "three-links", **args, reuse_matching_from=verified,
+                                       reuse_original_runs=[parent, root])
+        assert deeper["counts"]["accepted"] == 1 and deeper["model_calls"]["replayed_matching"] == 6 and len(calls) == 6
+        saved_path = next(parent.glob("cases/*/001-student.json"))
+        saved = json.loads(saved_path.read_bytes())
+        saved["response"]["content"] = "A different response to the same question."
+        saved_path.write_text(json.dumps(saved), encoding="utf-8")
+        tampered = generate_guided_cases(path, tmp_path / "changed-response", **args, reuse_matching_from=parent,
+                                         reuse_original_runs=[root])
+        assert tampered["counts"]["interrupted"] == 1 and len(calls) == 6
         with pytest.raises(ValueError, match="same input_sha256"):
             generate_guided_cases(different, tmp_path / "wrong-source", **args, reuse_matching_from=root)
     finally:

@@ -227,7 +227,8 @@ def replay_first(path, ident, payload, prior_binding, *, expected_receipt_sha256
     }
 
 
-def replay_matching_call(root, ident, role, index, payload, prior_binding, *, expected_sha256=None):
+def replay_matching_call(root, ident, role, index, payload, prior_binding, *, expected_sha256=None,
+                         original_runs=None, visited=frozenset()):
     relative = location(Path("."), ident) / f"{index:03}-{role}.json"
     path = root / relative
     if not path.exists():
@@ -246,11 +247,45 @@ def replay_matching_call(root, ident, role, index, payload, prior_binding, *, ex
         if expected_sha256:
             raise ValueError("context recovery cannot regenerate a previously completed request")
         return None
-    if prior.get("origin"):
-        raise ValueError("matching receipt is itself a replay; use its original run for this call")
-    if can_resume_admission(prior, prior_binding, ident, role, index):
+    origin = prior.get("origin")
+    if origin:
+        if not original_runs:
+            raise ValueError("matching receipt is itself a replay; supply its original run for this call")
+        source_binding = origin.get("source_binding")
+        if prior_binding in visited or source_binding in visited or source_binding == prior_binding:
+            raise ValueError("cycle in frozen replay provenance")
+        last = (prior.get("attempts") or [{}])[-1]
+        if (prior.get("status") != "complete" or last.get("status") != "replayed"
+                or last.get("new_model_calls") != 0):
+            raise ValueError("unconfirmed replay provenance")
+        parent = original_runs.get(source_binding)
+        if parent is None:
+            raise ValueError("a required original run was not supplied")
+        current_manifest = read(root / "manifest.json")
+        parent_raw = (parent / "manifest.json").read_bytes()
+        parent_manifest = json.loads(parent_raw)
+        keys = (("reuse_first", "reuse_worked_first") if origin.get("kind") == "replayed_first"
+                else ("reuse_matching", "context_recovery"))
+        pins = [current_manifest.get(key) or {} for key in keys]
+        if (digest(current_manifest) != prior_binding or digest(parent_manifest) != source_binding
+                or not any(pin.get("source_binding") == source_binding
+                           and pin.get("source_manifest_sha256") == hashlib.sha256(parent_raw).hexdigest() for pin in pins)
+                or not re.fullmatch(r"[a-f0-9]{64}", str(origin.get("source_receipt_sha256", "")))):
+            raise ValueError("original replay evidence differs from its bound manifest")
+        parent_sha = origin["source_receipt_sha256"]
+        if origin.get("kind") == "replayed_matching_call":
+            original = replay_matching_call(parent, ident, role, index, payload, source_binding,
+                                            expected_sha256=parent_sha, original_runs=original_runs,
+                                            visited=visited | {prior_binding})
+        elif origin.get("kind") == "replayed_first" and (role, index) == ("student", 1):
+            original = replay_first(parent, ident, payload, source_binding, expected_receipt_sha256=parent_sha)
+        else:
+            raise ValueError("unsupported original receipt provenance")
+        if original != (prior["response"], origin):
+            raise ValueError("archived replay differs from its original response or provenance")
+    elif can_resume_admission(prior, prior_binding, ident, role, index):
         return None
-    if prior["status"] != "complete" or prior["attempts"][-1]["status"] != "complete":
+    elif prior["status"] != "complete" or prior["attempts"][-1]["status"] != "complete":
         raise ValueError("identical prior call has no confirmed response")
     return prior["response"], {
         "kind": "replayed_matching_call", "source_binding": prior_binding,
@@ -279,6 +314,7 @@ def run_guided_cases(
     reuse_worked_first_from=None,
     verified_step_receipts=None,
     reuse_matching_from=None,
+    reuse_original_runs=None,
     recover_context_from=None,
     context_proof=None,
     context_proof_sha256=None,
@@ -297,6 +333,8 @@ def run_guided_cases(
     if ((context_proof is None) != (context_proof_sha256 is None)
             or (context_proof is not None and (not recover_context_from or export_only))):
         raise ValueError("a sealed recovery requires its proof file, pinned SHA-256 and original run")
+    if reuse_original_runs and not reuse_matching_from:
+        raise ValueError("original replay runs require an immediate matching source")
     if recover_context_from and (not selected or any((reuse_matching_from, reuse_first_from, reuse_worked_first_from,
             historical_first_from, historical_first_input, retry_interrupted, first_pass_only, prefetch_worked_first))
             or recover_context_from.resolve() == output.resolve()):
@@ -460,6 +498,7 @@ def run_guided_cases(
             recovery = freeze_context_recovery(recover_context_from, config, selected, endpoints, location,
                                                context_proof, context_proof_sha256)
             config["context_recovery"] = recovery
+        original_runs = {}
         if reuse_matching_from:
             if reuse_matching_from.resolve() == output.resolve():
                 raise ValueError("cross-run replay requires a different source run")
@@ -481,6 +520,19 @@ def run_guided_cases(
                     raise ValueError(f"cross-run replay requires the same {key}")
             config["reuse_matching"] = {"source_binding": digest(prior),
                                         "source_manifest_sha256": hashlib.sha256(prior_bytes).hexdigest()}
+            if reuse_original_runs:
+                pins = {}
+                for original in reuse_original_runs:
+                    raw = (original / "manifest.json").read_bytes()
+                    ancestor = json.loads(raw)
+                    identity = digest(ancestor)
+                    if (original.resolve() in {output.resolve(), reuse_matching_from.resolve()}
+                            or identity == config["reuse_matching"]["source_binding"] or identity in original_runs
+                            or ancestor.get("input_sha256") != config["input_sha256"]):
+                        raise ValueError("original replay runs must be distinct ancestors of the same input")
+                    original_runs[identity] = original
+                    pins[identity] = hashlib.sha256(raw).hexdigest()
+                config["reuse_matching"]["original_manifests"] = pins
         prior_first_root = reuse_first_from or reuse_worked_first_from
         if prior_first_root:
             if prior_first_root.resolve() == output.resolve():
@@ -633,7 +685,7 @@ def run_guided_cases(
                                             expected_receipt_sha256=parent["receipts"][source["id"]])
                 elif reuse_matching_from and serving_role in matching_roles:
                     replayed = replay_matching_call(reuse_matching_from, source["id"], role, index, payload,
-                                                    config["reuse_matching"]["source_binding"])
+                                                    config["reuse_matching"]["source_binding"], original_runs=original_runs)
                     # Legacy native receipts may have copied the requested model into the response.
                     if (replayed and native_final and template_version in SOLVER_FINAL_VERSIONS
                             and not replayed[0].get("model_identity_source")):

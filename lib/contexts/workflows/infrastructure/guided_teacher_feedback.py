@@ -36,7 +36,8 @@ def archive_receipt(folder, binding, ident, role, index, expected=None, protocol
     if role == "student" and index == 1 and origin["kind"] == "replayed_first":
         replay = replay_first(parent, ident, row["request"], binding, expected_receipt_sha256=saved_hash)
     elif origin["kind"] == "replayed_matching_call":
-        replay = replay_matching_call(parent, ident, role, index, row["request"], binding, expected_sha256=saved_hash)
+        replay = replay_matching_call(parent, ident, role, index, row["request"], binding,
+                                     expected_sha256=saved_hash, original_runs=parents)
     else:
         raise ValueError(f"unsupported source receipt origin for {ident}/{path.name}")
     if not replay or replay != (row["response"], origin):

@@ -85,6 +85,9 @@ def main():
     cli.add_argument("--reuse-matching-from", type=Path,
                      help="Reuse completed calls from another run of the same input, experience and endpoints "
                           "when the exact request bytes, role and checkpoint match")
+    cli.add_argument("--reuse-original-run", dest="reuse_original_runs", type=Path, action="append",
+                     help="With --reuse-matching-from, supply an original archive for receipts already replayed "
+                          "by that source. Repeat for additional ancestors. Every hop must match its frozen hashes.")
     cli.add_argument("--until-correct", action=argparse.BooleanOptionalAction, default=None,
                      help="Continue while verifiable guidance is available (default since protocol 4.2). "
                           "Use --no-until-correct for a bounded experiment")
