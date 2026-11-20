@@ -428,6 +428,8 @@ def student_reasoning_trace(attempts, question, *, verified_truncated_only=False
             solver = ("接手续写者" if chinese else "Continuation solver") if attempt.get("solving_role") == "strong_continuation" else (
                 "先前学生" if chinese else "Earlier student")
             label = f"{solver} · {index}"
+        if local := attempt.get("local_step"):
+            label += "\n" + local["question_quote"] + "\n" + local["request"]
         text = attempt["student"]["content"]
         if verified_truncated_only and attempt.get("truncated_observation"):
             text = "\n".join(f["text"] for f in attempt.get("program_confirmed", []))

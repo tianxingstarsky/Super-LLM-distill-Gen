@@ -10,7 +10,7 @@ from .guided_teaching_steps import certified_complete_disclosure, certified_rule
 
 GUIDED_TARGET_FILE = "training-targets.jsonl"
 GUIDED_TARGET_SCHEMA = "guided-training-target/v1"
-GUIDED_TARGET_VERSIONS = frozenset({"4.9.1", "4.10.0", "4.10.1", "4.10.2"})
+GUIDED_TARGET_VERSIONS = frozenset({"4.9.1", "4.10.0", "4.10.1", "4.10.2", "4.10.3"})
 
 
 class GuidedTargetHeld(ValueError):
@@ -56,6 +56,8 @@ def _correction_prompt(question, attempts, chinese):
     history = []
     for attempt in attempts:
         turn = {"attempt": attempt["attempt"], "student_draft": attempt["student"]["content"]}
+        if local := attempt.get("local_step"):
+            turn["local_step_request"] = {key: local[key] for key in ("question_quote", "request")}
         if attempt.get("formal_answer"):
             turn["student_delivery"] = attempt["formal_answer"]["response"]["content"]
         if attempt.get("disclosure"):
@@ -156,7 +158,8 @@ def guided_training_target(case, case_archive, trusted_solution_receipts, *, cal
         formal = last["formal_answer"]
         origin = case["final_answer_provenance"]
         role = last.get("solving_role", "student")
-        strong_handoff = case.get("protocol") == "guided-draft-snapshot/v4.10.2" and role == "strong_continuation"
+        strong_handoff = case.get("protocol") in {
+            "guided-draft-snapshot/v4.10.2", "guided-draft-snapshot/v4.10.3"} and role == "strong_continuation"
         if (origin != formal["provenance"] or origin["author"] != role or not origin["model"]
                 or formal["response"].get("model") != origin["model"] or last["student"].get("model") != origin["model"]
                 or formal["response"]["content"] != answer or formal["check"]["format_ok"] is not True
@@ -173,7 +176,7 @@ def guided_training_target(case, case_archive, trusted_solution_receipts, *, cal
             reference = certified_complete_disclosure(case, trusted_solution_receipts)
         if staged:
             expected = certified_rule_prefixes(question, reference)
-            if (case.get("protocol") not in {"guided-draft-snapshot/v4.10.1", "guided-draft-snapshot/v4.10.2"}
+            if (case.get("protocol") not in {"guided-draft-snapshot/v4.10.1", "guided-draft-snapshot/v4.10.2", "guided-draft-snapshot/v4.10.3"}
                     or len(staged) > len(expected)
                     or any(any(actual.get(k) != v for k, v in planned.items())
                            for actual, planned in zip(staged, expected))):
@@ -223,7 +226,8 @@ def guided_training_target(case, case_archive, trusted_solution_receipts, *, cal
     if any(contains_chat_control(text) for text in (question, target.get("reasoning_content", ""), answer)):
         raise GuidedTargetHeld("chat_delimiter_in_training_text")
     messages = [{"role": "system", "content": case["task_system"]}] if case.get("task_system") else []
-    if case.get("protocol") in {"guided-draft-snapshot/v4.10.0", "guided-draft-snapshot/v4.10.1", "guided-draft-snapshot/v4.10.2"}:
+    if case.get("protocol") in {"guided-draft-snapshot/v4.10.0", "guided-draft-snapshot/v4.10.1",
+                                "guided-draft-snapshot/v4.10.2", "guided-draft-snapshot/v4.10.3"}:
         provenance["evidence_basis"] = {"independent_answer": "independent_answer_key",
                                         "teacher_demonstration": "verified_source_solution"}.get(
                                             objective, "answer_key_and_tutor_review")

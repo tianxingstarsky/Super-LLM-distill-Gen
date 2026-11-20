@@ -71,6 +71,8 @@ def main():
                           "Its file digest must match the source manifest.")
     cli.add_argument("--protocol-version", help="Pin a protocol for a new run. 4.10.0 supports verified calculation plans. "
                      "4.10.1 also supports worked teaching operations and attested rule-proof steps. "
+                     "4.10.2 can hand off a completed draft with repeated final declarations after full disclosure. "
+                     "4.10.3 lets the learner submit supported local operations before answering the whole task. "
                      "Pin the same version in both arms of an experience comparison. Existing runs use their manifest.")
     cli.add_argument("--recover-context-from", type=Path, metavar="PARENT",
                      help="Finish selected cases stopped before a local chat dispatch exceeded its slot. "

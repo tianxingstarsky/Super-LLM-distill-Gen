@@ -13,6 +13,7 @@ from .review_guided_disclosure import (
 from .repair_guided_student_evidence import check_or_repair_student_findings
 from ..domain.guided_disclosure import RENDERED_CONTINUATION_VERSIONS, render_student_continuation
 from ..domain.guided_quantity_scope import storage_quantity_findings, storage_quantity_issue
+from ..domain.guided_local_steps import check_local_step, local_step_material, local_step_target
 from ..domain.guided_student_calculations import asserted_arithmetic_errors, recovered_student_calculations
 from ..domain.guided_student_evidence import (
     checked_derivation_conflict, checked_student_approaches, partial_review_evidence, verified_student_stage,
@@ -49,6 +50,7 @@ from lib.prompts.workflow_guided_answers import (
     COACH,
     DIRECT_STUDENT, CALCULATION_ESTIMATE,
     GROUNDED_STUDENT_REVIEW,
+    LOCAL_STEP_STUDENT, LOCAL_STEP_STUDENT_ZH,
     ORDERED_STUDENT_EVIDENCE,
     REVIEW_TASK_ANALYSIS,
     SHOWN_ANSWER_ASSESSMENT,
@@ -86,8 +88,9 @@ class GenerateGuidedAnswer:
         language = str(source.get("source", {}).get("language") or "").lower()
         chinese = language.startswith("zh") if language else any("\u4e00" <= ch <= "\u9fff" for ch in question)
         evidenced_progress = protocol_version in EVIDENCED_PROGRESS_VERSIONS
-        contextual_operations = protocol_version in {"4.10.1", "4.10.2"}
-        delivery_handoff = protocol_version == "4.10.2"
+        local_steps = protocol_version == "4.10.3"
+        delivery_handoff = local_steps or protocol_version == "4.10.2"
+        contextual_operations = delivery_handoff or protocol_version == "4.10.1"
         if (trusted_solution_receipts or continuation_model is not None) and not evidenced_progress:
             raise ValueError("complete-disclosure teaching requires guided protocol 4.8")
         skip_acquired = protocol_version != "3.0.0"
@@ -133,7 +136,8 @@ class GenerateGuidedAnswer:
                     "4.5.0": "v4.5", "4.5.1": "v4.5.1", "4.6.0": "v4.6", "4.7.0": "v4.7",
                     "4.7.1": "v4.7.1", "4.8.0": "v4.8", "4.8.1": "v4.8.1",
                     "4.8.2": "v4.8.2", "4.8.3": "v4.8.3", "4.9.0": "v4.9", "4.9.1": "v4.9.1",
-                    "4.10.0": "v4.10.0", "4.10.1": "v4.10.1", "4.10.2": "v4.10.2"}[protocol_version]
+                    "4.10.0": "v4.10.0", "4.10.1": "v4.10.1", "4.10.2": "v4.10.2",
+                    "4.10.3": "v4.10.3"}[protocol_version]
         tutor_instruction = SINGLE_DECISION_REVIEW if single_decision else ANCHORED_REVIEW if anchored else COACH
         if grounded:
             tutor_instruction += "\n\n" + GROUNDED_STUDENT_REVIEW
@@ -222,6 +226,8 @@ class GenerateGuidedAnswer:
                 else:
                     last_full_input_evidence = (list(active), dict(findings), dict(approaches))
             messages = list(initial_messages)
+            local_target = (local_step_target(source, attempts[-1].get("disclosure"), trusted_solution_receipts,
+                                              chinese=chinese) if local_steps and attempts and not send_full else None)
             direct_first = index == 1 and direct_protocol and (needs_worked_calculation or uses_direct_first(source, protocol_version))
             if direct_first:
                 request_estimate = CALCULATION_ESTIMATE if needs_worked_calculation else DIRECT_STUDENT
@@ -260,6 +266,8 @@ class GenerateGuidedAnswer:
                         messages[0] = {"role": "system", "content": instruction + student_experience + task_suffix}
                 else:
                     continuation = "Continue the solution from this current view.\n" + json.dumps(view, ensure_ascii=False)
+                if local_target:
+                    continuation = local_step_material(local_target) + continuation
                 messages.append({"role": "tool", "content": continuation})
                 if next_solver == "strong_continuation":
                     # Only the solver changes. No new hint, private assessment or failed
@@ -267,6 +275,10 @@ class GenerateGuidedAnswer:
                     messages = list(attempts[-1]["student_request_messages"])
                 if skip_acquired:
                     public.append(messages[-1])
+            if local_target:
+                instruction = LOCAL_STEP_STUDENT_ZH if chinese else LOCAL_STEP_STUDENT
+                messages[0] = {"role": "system", "content": "\n\n".join(filter(None, (
+                    task_system, student_experience, instruction)))}
             student = self.request(next_solver, index, messages, None)
             if stop_after_first_student_receipt:
                 # The request port has durably recorded this exact response. Leave all
@@ -295,7 +307,7 @@ class GenerateGuidedAnswer:
             if evidenced_progress:
                 attempt["verified_stage"] = {"assessed": False, "comparable": False, "state": "not_assessed",
                                              "hints_received": len(disclosed), "student_advanced": None}
-            verify_student = (plan and index == 1) or (delivery_handoff and send_full and next_solver == "student")
+            verify_student = local_target or (plan and index == 1) or (delivery_handoff and send_full and next_solver == "student")
             if verify_student and (not student.get("model")
                                    or expected_first_model is not None and student["model"] != expected_first_model):
                 status, issue = "awaiting_guidance", "solver_identity_unverified"
@@ -315,6 +327,10 @@ class GenerateGuidedAnswer:
                 attempt["check"] = dict(
                     format_ok=False, answer=None, answer_matches=None, issue=issue
                 )
+                if local_target:
+                    status = "awaiting_guidance"
+                    attempt["local_step"], _ = check_local_step(local_target, student, index)
+                    break
                 if truncated_progress and student["finish_reason"] == "length" and not student.get("reasoning_content"):
                     certified = checked_truncated_progress(
                         source.get("progress_checks", []), student["content"], index
@@ -333,10 +349,14 @@ class GenerateGuidedAnswer:
                     break
                 attempt["truncated_observation"] = incomplete
             suffix = student["content"]
+            local_findings = {}
+            if local_target:
+                action, local_findings = check_local_step(local_target, student, index)
+                attempt["local_step"] = action
             public.append({"role": "assistant", "content": suffix})
             direct = check_direct_answer(suffix, gold, include_mismatch=grounded) if direct_first and not incomplete else None
             direct_match = direct if direct and direct["answer_matches"] else None
-            if incomplete:
+            if incomplete or local_target:
                 new_segments, answer_line = [], ""
             elif direct:
                 new_segments, answer_line = [], suffix
@@ -376,7 +396,9 @@ class GenerateGuidedAnswer:
             if repeated is not None:
                 check.update(format_ok=False, issue="repeated_retained_segment")
             attempt["check"] = check
-            if protocol_version in CALCULATION_PLAN_VERSIONS and observe_draft_candidates and not check["format_ok"]:
+            if local_target:
+                check.update(format_ok=False, answer=None, answer_matches=None, issue="local_step_only")
+            if not local_target and protocol_version in CALCULATION_PLAN_VERSIONS and observe_draft_candidates and not check["format_ok"]:
                 draft_candidate = latest_marked_draft_candidate(suffix)
                 if draft_candidate:
                     attempt["marked_draft_candidate"] = draft_candidate
@@ -442,7 +464,8 @@ class GenerateGuidedAnswer:
                 if anchored
                 else {}
             )
-            if carry_progress and next_solver == "student" and not send_full:
+            certified.update(local_findings)
+            if carry_progress and next_solver == "student" and not send_full and not local_target:
                 pieces = new_segments
                 if incomplete:
                     # The unfinished trailing line can still qualify or negate an equation.
@@ -519,12 +542,16 @@ class GenerateGuidedAnswer:
                 material["already_known_clues"] = [
                     item for item in clue_ledger if item["status"] != "disclosed"
                 ]
-            if incomplete:
+            no_whole_submission = bool(incomplete or local_target)
+            if no_whole_submission:
                 # No submission to assess. Retain previously checked steps; the unfinished
                 # passage is visible only as an attributed observation for tutoring.
                 review = dict(verdict="uncertain", verified_prefix_count=len(active), reusable=[],
                               first_unresolved_id="final_answer", diagnosis="The reply reached its output limit without a final answer.")
                 attempt["student_assessment_source"] = "completed_response_without_final_answer"
+                if local_target:
+                    review["diagnosis"] = action.get("difficulty") or action["status"]
+                    attempt["student_assessment_source"] = "local_operation_check"
             elif direct:
                 assessment = {"decision": "revise:final_answer", "reusable": [],
                               "diagnosis": "The submitted final value disagrees with the independent key. "
@@ -549,7 +576,7 @@ class GenerateGuidedAnswer:
             try:
                 proposed_approaches = []
                 proposed_conflict = []
-                if not direct and not incomplete:
+                if not direct and not no_whole_submission:
                     assessment = read_teacher_submission(coach)
                     if assess_shown_answer and isinstance(assessment, dict):
                         proposed_conflict = assessment.pop("anchored_contradiction", [])
@@ -557,7 +584,7 @@ class GenerateGuidedAnswer:
                         proposed_approaches = assessment.pop("independent_approaches", None)
                         if not isinstance(proposed_approaches, list):
                             raise ValueError("student assessment is missing the independent approaches decision")
-                if not incomplete:
+                if not no_whole_submission:
                     review = validated_review(
                         assessment, submitted, answer_line, anchored=anchored, single_decision=single_decision)
                 count = review["verified_prefix_count"]
@@ -573,7 +600,7 @@ class GenerateGuidedAnswer:
                     status = "awaiting_guidance"
                 break
             feedback_errors = (asserted_arithmetic_errors(review["diagnosis"], question=question, check_result_expressions=True)
-                               if check_arithmetic and not direct and not incomplete else [])
+                               if check_arithmetic and not direct and not no_whole_submission else [])
             if feedback_errors:
                 # Keep the original private submission in coach_response. Only the independent
                 # student evidence and previously certified prefix survive an unreliable review.
@@ -586,7 +613,7 @@ class GenerateGuidedAnswer:
                           "reusable": [], "diagnosis": "The tutor's stated arithmetic does not support this assessment."}
                 proposed_approaches, proposed_conflict = [], []
                 version["review_conflict"] = "refuted_teacher_feedback"
-            elif ordered_evidence and not direct and not incomplete:
+            elif ordered_evidence and not direct and not no_whole_submission:
                 resolved, problem = check_or_repair_student_findings(
                     self.request, attempt, material, assessment, version["submitted_ids"], schema["properties"]["reusable"])
                 if problem:
@@ -832,6 +859,12 @@ class GenerateGuidedAnswer:
                 issue = None
                 break
             issue = check["issue"] or "explanation_requires_review"
+            # A local reply never spends the learner's last opportunity to answer the original task.
+            # Each published disclosure gets at most one local reply.
+            if local_target and ((not until_correct and index == attempt_limit) or
+                    not eligible_teaching_steps(source, active, findings, disclosed, tried_verified_steps)):
+                attempt_limit = max(attempt_limit, index + 1)
+                continue
             if delivery_log:
                 stage = attempt["verified_stage"]
                 if next_solver == "strong_continuation":
@@ -927,6 +960,10 @@ class GenerateGuidedAnswer:
                         proof_position += 1
                         attempt_limit = max(attempt_limit, index + 1)
                     if disclosure is None:
+                        if local_target and issue in {"teacher_needs_more_evidence", "verified_teaching_operations_exhausted",
+                                                      "teacher_disclosure_withheld", "unchanged_withheld_disclosure"}:
+                            attempt_limit = max(attempt_limit, index + 1)
+                            continue
                         if (full_reference and disclosed and issue in {"teacher_needs_more_evidence",
                                 "verified_teaching_operations_exhausted", "teacher_disclosure_withheld",
                                 "unchanged_withheld_disclosure"}):
@@ -972,7 +1009,7 @@ class GenerateGuidedAnswer:
         if calculation_tutoring is not None:
             terminal_check = calculation_tutoring.get("final_delivery", {}).get(
                 "check", {"answer_matches": None, "answer": None})
-        raw_teacher_verdict = (last.get("coach") or {}).get("verdict")
+        raw_teacher_verdict = None if last.get("local_step") else (last.get("coach") or {}).get("verdict")
         draft_only_review = bool(last.get("marked_draft_candidate") and raw_teacher_verdict == "supported"
                                  and terminal_check.get("answer_matches") is not True)
         route = "reviewed_solution"

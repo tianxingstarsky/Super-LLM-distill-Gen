@@ -57,7 +57,7 @@ def verified_student_stage(check, findings, prior_attempts, hints_received, *, s
     facts = {}
     for item in findings.values():
         kind = item["evidence_level"]
-        if kind == "program_checked_reviewed_finite_set":
+        if kind in {"program_checked_reviewed_finite_set", "checked_local_operation"}:
             key = "check:" + item["check_id"]
         elif kind == "source_verified_student_calculation":
             key = "calculation:" + item["calculation_key"]

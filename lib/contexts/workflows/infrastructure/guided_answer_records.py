@@ -21,6 +21,7 @@ from ..domain.experience_evolution import digest
 from ..domain.reasoning_bank import no_new_memory
 from ..domain.guided_answers import validate_source
 from ..domain.guided_disclosure import RENDERED_CONTINUATION_VERSIONS, render_student_continuation
+from ..domain.guided_local_steps import local_step_material, local_step_target
 from ..domain.guided_teacher_delivery import (
     CALCULATION_PLAN_VERSIONS, CHECKED_TUTOR_VERSIONS, EVIDENCED_PROGRESS_VERSIONS, GUIDED_DELIVERY_VERSIONS, SOLVER_FINAL_VERSIONS,
     TRUNCATED_TUTORING_VERSIONS, requested_delivery, uses_direct_first,
@@ -140,6 +141,13 @@ def _check_rendered_guidance(case, attempt, payload, previous, hint):
     chinese = language.startswith("zh") if language else any("\u4e00" <= ch <= "\u9fff" for ch in case["question"])
     suffix = render_student_continuation(view, {}, chinese=chinese)
     content = payload["messages"][-1]["content"]
+    if case.get("protocol") == "guided-draft-snapshot/v4.10.3":
+        target = local_step_target(case, hint, {hint.get("source_step_receipt")}, chinese=chinese)
+        if target:
+            frame = local_step_material(target)
+            if not content.startswith(frame):
+                raise ValueError("student request differs from the published local operation")
+            content = content[len(frame):]
     if content == suffix:
         return
     if content.endswith("\n\n" + suffix):

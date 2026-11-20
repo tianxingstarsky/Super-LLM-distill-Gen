@@ -2,6 +2,17 @@
 
 VERSION = "4.10.0"
 
+LOCAL_STEP_STUDENT = (
+    "The question supplies the setting. Work on the current tutoring step. You may explain your reasoning. "
+    "On the last line submit this step's values as a JSON array of strings. If you need help, submit a JSON "
+    "object with a blocked field explaining the obstacle. "
+    "The full task will have a separate answer turn."
+)
+LOCAL_STEP_STUDENT_ZH = (
+    "原题提供完整背景，本轮处理当前辅导步骤。可以说明这一步的推导，末行用 JSON 字符串数组提交这一步的取值。"
+    "如果需要帮助，提交含 blocked 字段的 JSON 对象，说明卡在哪里。整题另有作答回合。"
+)
+
 STUDENT_REASONING_PROGRESS = (
     "State what you have established with the evidence for it. Use that result to work out "
     "what is still open. If a check reveals a conflict, name the conflicting fact and revise the "

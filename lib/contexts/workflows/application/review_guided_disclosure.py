@@ -83,6 +83,8 @@ def _review_material(source, attempt, retained, findings, disclosed, candidate):
             k: stage[k] for k in ("state", "comparable", "answer_key_match", "student_advanced", "new_fact_segments",
                                   "new_method_segments", "unresolved_review_evidence")
             if k in stage}
+    if attempt.get("local_step"):
+        material["current_difficulty"]["local_step"] = attempt["local_step"]
     if attempt.get("supported_student_approaches"):
         material["supported_student_approaches"] = [
             {"text": item["text"], "question_quote": item["question_quote"]}
@@ -260,7 +262,7 @@ def author_next_disclosure(request, source, attempt, retained, findings, disclos
             }
         if check_arithmetic and attempt["student"]["content"].strip():
             material["current_difficulty"]["student_wrote_a_response"] = True
-            if not attempt["check"]["format_ok"]:
+            if not attempt["check"]["format_ok"] and not attempt.get("local_step"):
                 material["current_difficulty"]["answer_format_issue"] = attempt["check"].get("issue")
         author_system += "\n\n" + VERIFIED_OUTCOME_CONTEXT
         reviewer_system += "\n\n" + VERIFIED_OUTCOME_CONTEXT
