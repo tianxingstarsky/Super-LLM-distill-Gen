@@ -156,7 +156,7 @@ class GenerateGuidedAnswer:
                     "4.10.0": "v4.10.0", "4.10.1": "v4.10.1", "4.10.2": "v4.10.2",
                     "4.10.3": "v4.10.3", "4.10.4": "v4.10.4", "4.10.5": "v4.10.5", "4.10.6": "v4.10.6",
                     "4.10.7": "v4.10.7", "4.10.8": "v4.10.8", "4.10.9": "v4.10.9", "4.10.10": "v4.10.10",
-                    "4.10.11": "v4.10.11", "4.10.12": "v4.10.12"}[protocol_version]
+                    "4.10.11": "v4.10.11", "4.10.12": "v4.10.12", "4.10.13": "v4.10.13"}[protocol_version]
         tutor_instruction = SINGLE_DECISION_REVIEW if single_decision else ANCHORED_REVIEW if anchored else COACH
         if grounded:
             tutor_instruction += "\n\n" + GROUNDED_STUDENT_REVIEW
