@@ -81,9 +81,15 @@ def reviewed_disclosure_for_learning(case_path, case, number, revision, source_r
     if rendered is not None:
         parents = {digest(read(src / "manifest.json")): src for src in source_runs}
         author = "disclosure_rewrite" if revision else "disclosure_draft"
-        checkpoint = work["review_checkpoint"]
-        for role, index, expected in ((author, number, work["draft_response"]),
-                                      (checkpoint["role"], checkpoint["index"], work["review_response"])):
+        checkpoints = [(author, number, work["draft_response"])]
+        checkpoint = work.get("review_checkpoint")
+        if checkpoint and work.get("review_response"):
+            checkpoints.append((checkpoint["role"], checkpoint["index"], work["review_response"]))
+        elif checkpoint or work.get("review_response") or work.get("assessment") or work.get("validated_citations"):
+            raise ValueError("rendered teacher assessment is missing its independent review")
+        # A locally refuted proposal still needs its author's original. The learning
+        # use case independently reproduces that refutation before treating it as negative.
+        for role, index, expected in checkpoints:
             receipt = read(folder / f"{index:03}-{role}.json")
             archived = replay_matching_call(run, case["id"], role, index, receipt["request"], case["binding"], original_runs=parents)
             if not archived or archived[0] != expected:

@@ -65,6 +65,14 @@ def test_direct_learning_uses_the_bound_registry_and_replays_the_selected_teache
     monkeypatch.setattr(sys, "argv", [*argv, "--source-run", str(source_run)])
     cli.main()
     assert received == [review_request["messages"][0]["content"]]
+    local = {"revision": 0, "draft_response": response, "issue": "teacher_disclosure_arithmetic_contradiction"}
+    local_case = {**case, "attempts": [{"attempt": 1, "disclosure_work": [local]}]}
+    with monkeypatch.context() as patch:
+        patch.setattr(records, "verify_teacher_rendering", lambda *args: "The locally checked public wording.")
+        assert cli.reviewed_disclosure_for_learning(path, local_case, 1, 0, [source_run]) == "The locally checked public wording."
+        local["assessment"] = {"decision": "release"}
+        with pytest.raises(ValueError, match="missing its independent review"):
+            cli.reviewed_disclosure_for_learning(path, local_case, 1, 0, [source_run])
     save(origin_path, {**record, "response": {"content": "Changed after authentication."}})
     with pytest.raises(ValueError, match="has changed"):
         cli.main()
