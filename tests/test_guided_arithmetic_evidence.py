@@ -53,13 +53,18 @@ def test_private_review_cannot_edit_or_publish_a_withheld_authored_intermediate(
 
 
 def test_private_review_rejects_observed_public_protocol_and_complete_fact_selection():
-    from lib.contexts.workflows.domain.guided_disclosure import check_authored_wording
+    from lib.contexts.workflows.domain.guided_disclosure import PublicOperationIdentifier, check_authored_wording
     premise = "Consider deleting exactly one original fact at a time."
     selection = {"kind": "exact", "value": "F01,F04"}
     def check(bridge, hint):
         check_authored_wording(bridge, hint, premise, ["action_a"], selection, "distinct_fact_ids")
     with pytest.raises(ValueError, match="contains_operation_id"):
         check("Applying action_a gives the volume.", "Which quantity comes next?")
+    # Literal source wording remains citable. A private selection prefix is still marked, preserving exact case.
+    check_authored_wording("Compare action_a.", "Record its change.", "Compare action_a.", ["action_a"], None, None)
+    with pytest.raises(PublicOperationIdentifier) as matched:
+        check_authored_wording("Compare action_a.", "SELECT:ACTION_A", "Compare action_a.", ["action_a"], None, None)
+    assert matched.value.spans == [("hint", 0, len("SELECT:ACTION_A"))]
     with pytest.raises(ValueError, match="response_markup"):
         check("```json{", "Trace which rules conclude blue.")
     with pytest.raises(ValueError, match="complete_target_selection"):

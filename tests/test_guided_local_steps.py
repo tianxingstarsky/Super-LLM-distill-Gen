@@ -105,6 +105,53 @@ def test_first_teacher_and_reviewer_receive_the_public_student_task_for_the_sele
         assert values["type"] == "array"
 
 
+def test_repeated_private_operation_in_the_first_teacher_bridge_locates_only_the_existing_rewrite():
+    source, _ = signed_source()
+    step = source["verified_teaching_steps"]["steps"][0]
+    # Verbatim fragment repeated in both archived 67 bridges; include padding to check raw-field coordinates.
+    leaked = "  按照 `fixed-position` 操作的指引，你需要按顺序给出位置、旧值和当前值"
+    corrected = "按题面改动的顺序，把改动的位置、先前的值和现在生效的值分别写下来。"
+
+    def run(targeted, first_bridge, rewritten_bridge):
+        calls = {}
+        def request(role, index, messages, schema):
+            calls[role] = (messages, schema)
+            if role in {"disclosure_draft", "disclosure_rewrite"}:
+                response = dict(decision="apply:fixed-position", question_quote=step["quote"], reason="Address the change.",
+                                bridge=first_bridge if role == "disclosure_draft" else rewritten_bridge,
+                                hint="看哪一个条件发生了变化，按发生顺序记录。")
+            else:
+                assert role == "disclosure_recheck"
+                response = dict(decision="release", citations=[dict(evidence_id="question", quote=step["quote"])],
+                                reason="The change is grounded.", pairing=dict(student_fit=True, evidence_support=True, history_fit="first"))
+            return dict(content=json.dumps(response), finish_reason="stop")
+        attempt = dict(attempt=1, student={"content": "7"}, check={"format_ok": True, "answer_matches": False},
+                       derivation_available=False)
+        published, issue = review_or_recommend_disclosure(
+            request, source, attempt, [], {}, [], dict(ordinal=1, kind="idea", text="", replaces_from="final_answer"),
+            teacher_experience="", tried=set(), quoted_premises=True, contextual_operations=True, immutable_review=True,
+            targeted_hint_repair=targeted)
+        return calls, published, issue
+
+    old, _, _ = run(False, leaked, leaked)
+    new, withheld, issue = run(True, leaked, leaked)
+    assert list(old) == list(new) == ["disclosure_draft", "disclosure_rewrite"]
+    assert withheld is None and issue == "teacher_public_text_contains_operation_id"
+    assert old["disclosure_draft"] == new["disclosure_draft"]
+    def rewrite_packet(calls):
+        return json.loads(calls["disclosure_rewrite"][0][1]["content"])
+    packet = rewrite_packet(new)
+    repair = packet["requested_revision"].pop("public_wording_repair")
+    assert packet == rewrite_packet(old)
+    assert set(repair) == {"matches", "instruction"} and "private decision" in repair["instruction"]
+    start = leaked.index("fixed-position")
+    assert repair["matches"] == [{"field": "bridge", "span": [start, start+14], "text": "fixed-position"}]
+    calls, published, issue = run(True, leaked, corrected)
+    assert list(calls) == ["disclosure_draft", "disclosure_rewrite", "disclosure_recheck"]
+    assert issue is None and published["bridge"] == corrected and "public_wording_repair" not in str(calls["disclosure_recheck"])
+    assert run(True, "```json{", corrected) == run(False, "```json{", corrected)
+
+
 def test_public_source_choices_and_unknown_outcome_preserve_legacy_forecast_semantics():
     visible = {"original_question":"Find the total.", "ordered_published_disclosures":[
         {"ordinal":1, "text":"List the allowed combinations before counting."}],

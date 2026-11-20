@@ -123,19 +123,30 @@ def checked_teacher_draft(proposal, gold, retained, findings, disclosed, *, ques
     return bridge, hint
 
 
+class PublicOperationIdentifier(ValueError):
+    """A private identifier matched in the checked public wording."""
+
+    def __init__(self, spans):
+        super().__init__("teacher_public_text_contains_operation_id")
+        self.spans = spans
+
+
 def check_authored_wording(bridge, hint, question, operation_ids, gold, answer_syntax):
     """Keep private operation IDs, broken response framing and undisclosed answer lists out of a hint."""
     public = bridge + "\n" + hint
     for part in (bridge, hint):
         if re.fullmatch(r"\s*(?:`{3,}|~{3,})\s*(?:json)?\s*[\[{]?\s*", part, re.I):
             raise ValueError("teacher_public_field_is_response_markup")
+    spans = []
     for identifier in operation_ids:
         token = r"(?<![\w-])" + re.escape(identifier) + r"(?![\w-])"
-        if re.search(r"(?:apply|select):" + re.escape(identifier) + r"(?![\w-])", public, re.I):
-            raise ValueError("teacher_public_text_contains_operation_id")
-        opaque_identifier = "_" in identifier or "-" in identifier
-        if opaque_identifier and re.search(token, public, re.I) and not re.search(token, question, re.I):
-            raise ValueError("teacher_public_text_contains_operation_id")
+        pattern = r"(?:apply|select):" + re.escape(identifier) + r"(?![\w-])"
+        if ("_" in identifier or "-" in identifier) and not re.search(token, question, re.I):
+            pattern += "|" + token
+        for field, wording in (("bridge", bridge), ("hint", hint)):
+            spans.extend((field, *m.span()) for m in re.finditer(pattern, wording, re.I))
+    if spans:
+        raise PublicOperationIdentifier(spans)
     if not gold or answer_syntax not in {"fact_ids", "distinct_fact_ids", "distinct_letter_ids"}:
         return
     if answer_syntax == "distinct_letter_ids":

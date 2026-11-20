@@ -133,6 +133,7 @@ class GenerateGuidedAnswer:
                                   tried=tried_verified_steps, task_analysis=task_analysis,
                                   contextual_operations=contextual_operations, immutable_review=immutable_review,
                                   resolve_local_task=resolve_local_task if protocol_version in TEACHER_TASK_CONTRACT_VERSIONS else None,
+                                  targeted_hint_repair=protocol_version == "4.10.12",
                                   quoted_premises=protocol_version == "4.7.1" or evidenced_progress,
                                   check_arithmetic=check_arithmetic,
                                   bare_answer_operations=check_arithmetic and bare_answer_operations)

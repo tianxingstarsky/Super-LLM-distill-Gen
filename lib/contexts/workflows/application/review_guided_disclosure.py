@@ -21,7 +21,8 @@ from ..domain.guided_teaching_steps import checked_step_review, checked_step_sel
 from ..domain.guided_student_calculations import asserted_arithmetic_errors
 from ..domain.guided_quantity_scope import storage_quantity_findings, storage_quantity_issue
 from ..domain.guided_disclosure import (
-    check_authored_wording, checked_disclosure, checked_teacher_draft, disclosure_evidence, is_substantive_question_quote, question_premise_choices,
+    PublicOperationIdentifier, check_authored_wording, checked_disclosure, checked_teacher_draft, disclosure_evidence,
+    is_substantive_question_quote, question_premise_choices,
 )
 
 
@@ -275,7 +276,7 @@ def author_next_disclosure(request, source, attempt, retained, findings, disclos
                            *, grounded=False, allow_catalog=False, show_outcome=False, paired=False, tried=(),
                            task_analysis=False, quoted_premises=False, strict_author_decisions=False,
                            check_arithmetic=False, bare_answer_operations=False, contextual_operations=False,
-                           immutable_review=False, resolve_local_task=None):
+                           immutable_review=False, resolve_local_task=None, targeted_hint_repair=False):
     """Draft and independently review one publishable teacher continuation, with one bounded repair."""
     material, evidence, previous_id = _review_material(source, attempt, retained, findings, disclosed, reference)
     ceiling = material.pop("proposed_next_teacher_disclosure")
@@ -425,6 +426,14 @@ def author_next_disclosure(request, source, attempt, retained, findings, disclos
                     raise ValueError(issue)
         except (TypeError, ValueError) as exc:
             entry["issue"] = str(exc)
+            if targeted_hint_repair and not revision and isinstance(exc, PublicOperationIdentifier):
+                matches = []
+                for field, start, end in exc.spans:
+                    raw = entry["draft"][field]
+                    offset = len(raw) - len(raw.lstrip())
+                    start, end = start + offset, end + offset
+                    matches.append({"field": field, "span": [start, end], "text": raw[start:end]})
+                entry["public_operation_matches"] = matches
         else:
             if step:
                 approved, issue = _review_verified_step(request, attempt, history, material, evidence, previous_id,
@@ -507,6 +516,13 @@ def author_next_disclosure(request, source, attempt, retained, findings, disclos
         material["requested_revision"] = {"prior_draft": entry.get("draft"), "issue": entry["issue"],
                                           "private_reviewer_reason": assessment.get("reason")
                                           if isinstance(assessment, dict) else None}
+        if "public_operation_matches" in entry:
+            material["requested_revision"]["public_wording_repair"] = {
+                "matches": entry["public_operation_matches"],
+                "instruction": ("Rewrite the marked bridge or hint passage in the learner's language, describing the "
+                                "operation directly. Keep the operation identifier only in the private decision field "
+                                "when selecting it."),
+            }
         if entry.get("arithmetic_errors"):
             material["requested_revision"]["arithmetic_errors"] = entry["arithmetic_errors"]
         if entry.get("quantity_findings"):
@@ -530,7 +546,8 @@ def _checked_disclosure_issue(entry, question):
 def review_or_recommend_disclosure(request, source, attempt, retained, findings, disclosed, reference,
                                    *, teacher_experience, tried, task_analysis=False, quoted_premises=False,
                                    strict_author_decisions=False, check_arithmetic=False, bare_answer_operations=False,
-                                   contextual_operations=False, immutable_review=False, resolve_local_task=None):
+                                   contextual_operations=False, immutable_review=False, resolve_local_task=None,
+                                   targeted_hint_repair=False):
     """Try each remaining externally verified possibility at most once, still requiring independent release."""
     if attempt.get("recommend_verified_operation") and not contextual_operations:
         history = attempt["disclosure_work"] = []
@@ -541,7 +558,7 @@ def review_or_recommend_disclosure(request, source, attempt, retained, findings,
             grounded=True, allow_catalog=True, show_outcome=True, paired=True, tried=tried, task_analysis=task_analysis,
             quoted_premises=quoted_premises, strict_author_decisions=strict_author_decisions, check_arithmetic=check_arithmetic,
             bare_answer_operations=bare_answer_operations, contextual_operations=contextual_operations,
-            immutable_review=immutable_review, resolve_local_task=resolve_local_task,
+            immutable_review=immutable_review, resolve_local_task=resolve_local_task, targeted_hint_repair=targeted_hint_repair,
         )
         history = attempt["disclosure_work"]
         if contextual_operations:
