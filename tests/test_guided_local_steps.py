@@ -177,7 +177,13 @@ def test_local_reports_and_obstacles_flow_to_the_next_tutor_and_whole_answer(tmp
             if index == 2:
                 packet = json.loads(messages[-1]["content"])
                 assert packet["current_difficulty"]["local_step"]["status"] == status
-                if version in {"4.10.9", "4.10.10"}:
+                if version == "4.10.10":
+                    reviewed = packet["current_difficulty"]["learner_submission"]
+                    assert reviewed["author"] == "student" and reviewed["excerpts"][0]["text"] == first_step
+                    prior = packet["prior_behavior_forecast"]
+                    assert prior["guidance_delivery"]["status"] == placement
+                    assert "PRIVATE_FORECAST_SENTINEL" not in messages[-1]["content"]
+                elif version == "4.10.9":
                     feedback = packet["current_difficulty"]["behavior_prediction_feedback"]
                     assert feedback["guidance_delivery"]["status"] == placement
                     assert feedback["student_guidance"] is None
