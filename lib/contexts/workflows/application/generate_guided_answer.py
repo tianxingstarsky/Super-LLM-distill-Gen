@@ -16,6 +16,7 @@ from ..domain.guided_behavior_prediction import (
     prediction_messages, prediction_visible,
 )
 from ..domain.guided_disclosure import RENDERED_CONTINUATION_VERSIONS, render_student_continuation
+from ..domain.guided_disclosure import resume_after_local_step
 from ..domain.guided_quantity_scope import storage_quantity_findings, storage_quantity_issue
 from ..domain.guided_local_steps import (
     check_local_step, local_step_material, local_step_target, local_submission_schema, scoped_local_messages,
@@ -292,6 +293,10 @@ class GenerateGuidedAnswer:
                 instruction = LOCAL_STEP_STUDENT_ZH if chinese else LOCAL_STEP_STUDENT
                 messages[0] = {"role": "system", "content": "\n\n".join(filter(None, (
                     task_system, student_experience, instruction)))}
+            if (protocol_version == "4.10.10" and disclosed and not send_full and not local_target
+                    and attempts[-1].get("local_step") and not attempts[-1].get("disclosure")):
+                messages = resume_after_local_step(view, attempts[-1]["local_step"]["status"],
+                                                   initial_messages, chinese=chinese)
             if disclosed and skip_acquired:
                 public.append(messages[-1])
             prediction = None

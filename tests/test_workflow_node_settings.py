@@ -63,8 +63,8 @@ def test_guided_command_uses_the_selected_local_sft_model_and_cli_source_contrac
     command = next(item.value for item in ui.code if 'python -m lib.guided_answers' in item.value)
     assert "--coach-url 'http://127.0.0.1:8081/v1' --coach-model 'qwen-tutor'" in command
     assert "--workers 2 --coach-thinking" in command
-    assert '--protocol-version 4.10.9' in command
-    assert '--output .dataforge/guided-behavior-v4109' in command
+    assert '--protocol-version 4.10.10' in command
+    assert '--output .dataforge/guided-behavior-v41010' in command
 
 
 def _field(ui, label):

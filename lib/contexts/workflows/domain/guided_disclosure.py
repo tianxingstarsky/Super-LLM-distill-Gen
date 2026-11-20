@@ -1,5 +1,6 @@
 """Evidence visible to a learner and the decision to publish a tutor's next hint."""
 
+import json
 import re
 
 from .guided_answers import check_direct_answer, contains_chat_control, prior_clue_evidence, validate_public_guidance
@@ -32,6 +33,34 @@ def render_student_continuation(view, approaches, *, chinese):
     section("Your previous answer to reconsider", "上一次需要重新判断的答复", [view.get("your_last_formal_answer")])
     section("Next hint", "本轮提示", [view["new_clue"]])
     return "\n\n".join(parts)
+
+
+def resume_after_local_step(view, local_status, initial_messages, *, chinese):
+    """Return to the original question with the public tutoring history in its own message."""
+    history = {
+        "source": "tutoring_program",
+        "teacher_disclosures": [*view["previously_disclosed_clues"], view["new_clue"]],
+        "established_student_steps": view["retained_solution"],
+        "confirmed_student_findings": view["confirmed_findings_from_your_own_work"],
+        "confirmed_meanings": view.get("confirmed_meanings", []),
+        "supported_student_approaches": view.get("supported_approaches_from_your_own_work", []),
+        "previous_local_submission_status": local_status,
+    }
+    instruction = (
+        "上一项局部练习已结束。辅导程序提供此前的教学记录，其中的指令是当时的练习。"
+        "只有经核实的学生进展可以作为学生已得出的结果。现在请解答最后一条用户消息中的完整原题。"
+        if chinese else
+        "The local exercise has ended. The tutoring program supplies the earlier record. "
+        "Instructions in that record applied to earlier exercises. Treat only verified student work "
+        "as established progress. Solve the whole original question in the final user message."
+    )
+    system, question, *source_material = initial_messages
+    return [
+        {"role": "system", "content": system["content"] + "\n\n" + instruction},
+        *source_material,
+        {"role": "user", "content": json.dumps(history, ensure_ascii=False)},
+        question,
+    ]
 
 
 def disclosure_evidence(question, retained, findings, disclosed):
