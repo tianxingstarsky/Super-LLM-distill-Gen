@@ -4,7 +4,8 @@ from functools import partial
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
-from lib.contexts.workflows.infrastructure.guided_answer_records import run_guided_cases
+from lib.contexts.workflows.infrastructure.guided_answer_records import location, run_guided_cases
+from lib.contexts.workflows.infrastructure.guided_context_recovery import seal_context_proof
 from lib.contexts.workflows.infrastructure.guided_llama import GuidedChatEndpoint, SAMPLING_PROFILES
 from lib.model_request_scheduler import SharedModelScheduler, model_pool_identity
 
@@ -23,6 +24,10 @@ def _native_slot_pool(root, url, slots):
     )
     pool.set_observed_capacity(limit)
     return pool
+
+
+def seal_guided_overflows(parent, proof, selected):
+    return seal_context_proof(parent, proof, selected, location)
 
 
 def generate_guided_cases(
@@ -59,6 +64,8 @@ def generate_guided_cases(
     verified_step_receipts=None,
     reuse_matching_from=None,
     recover_context_from=None,
+    context_proof=None,
+    context_proof_sha256=None,
     historical_first_from=None,
     historical_first_input=None,
 ):
@@ -136,6 +143,8 @@ def generate_guided_cases(
         verified_step_receipts=verified_step_receipts,
         reuse_matching_from=reuse_matching_from,
         recover_context_from=recover_context_from,
+        context_proof=context_proof,
+        context_proof_sha256=context_proof_sha256,
         historical_first_from=historical_first_from,
         historical_first_input=historical_first_input,
     )

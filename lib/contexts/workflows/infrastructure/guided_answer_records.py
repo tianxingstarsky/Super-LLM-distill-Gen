@@ -279,6 +279,8 @@ def run_guided_cases(
     verified_step_receipts=None,
     reuse_matching_from=None,
     recover_context_from=None,
+    context_proof=None,
+    context_proof_sha256=None,
     historical_first_from=None,
     historical_first_input=None,
 ):
@@ -291,6 +293,9 @@ def run_guided_cases(
                                  or not case_ids or not all(isinstance(ident, str) and ident for ident in case_ids)):
         raise ValueError("case selection requires one or more source IDs")
     selected = frozenset(case_ids) if case_ids is not None else None
+    if ((context_proof is None) != (context_proof_sha256 is None)
+            or (context_proof is not None and (not recover_context_from or export_only))):
+        raise ValueError("a sealed recovery requires its proof file, pinned SHA-256 and original run")
     if recover_context_from and (not selected or any((reuse_matching_from, reuse_first_from, reuse_worked_first_from,
             historical_first_from, historical_first_input, retry_interrupted, first_pass_only, prefetch_worked_first))
             or recover_context_from.resolve() == output.resolve()):
@@ -449,7 +454,8 @@ def run_guided_cases(
         matching_roles = set()
         recovery = None
         if recover_context_from:
-            recovery = freeze_context_recovery(recover_context_from, config, selected, endpoints, location)
+            recovery = freeze_context_recovery(recover_context_from, config, selected, endpoints, location,
+                                               context_proof, context_proof_sha256)
             config["context_recovery"] = recovery
         if reuse_matching_from:
             if reuse_matching_from.resolve() == output.resolve():
@@ -589,9 +595,9 @@ def run_guided_cases(
                     raise ValueError("request differs from its saved checkpoint")
                 if saved.get("status") == "complete":
                     if parent_case and previous_hash and checkpoint.name != parent_case["failed"]:
-                        origin = saved.get("origin") or {}
-                        if (origin.get("source_receipt_sha256") != previous_hash
-                                or origin.get("response_sha256") != digest(saved["response"])):
+                        original, origin = replay_matching_call(recover_context_from, source["id"], role, index, payload,
+                                                                recovery["source_binding"], expected_sha256=previous_hash)
+                        if saved.get("origin") != origin or saved["response"] != original:
                             raise ValueError("saved recovery response does not match its pinned parent")
                     return guided_port_response(saved["response"], payload, role, template_version)
                 if saved and not retry_interrupted and not can_resume_admission(saved, binding, source["id"], role, index):

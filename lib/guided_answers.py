@@ -4,13 +4,13 @@ import argparse
 import json
 from pathlib import Path
 
-from lib.bootstrap.guided_answers import SAMPLING_PROFILES, generate_guided_cases
+from lib.bootstrap.guided_answers import SAMPLING_PROFILES, generate_guided_cases, seal_guided_overflows
 
 
 def main():
     cli = argparse.ArgumentParser(description=__doc__)
-    cli.add_argument("--input", type=Path, required=True)
-    cli.add_argument("--output", type=Path, required=True)
+    cli.add_argument("--input", type=Path)
+    cli.add_argument("--output", type=Path)
     cli.add_argument("--case-id", dest="case_ids", action="append",
                      help="Schedule this case from the unchanged input shard. Repeat to select more cases. "
                           "The shard summary still counts every source row.")
@@ -71,6 +71,11 @@ def main():
     cli.add_argument("--recover-context-from", type=Path, metavar="PARENT",
                      help="Finish selected cases stopped before a local chat dispatch exceeded its slot. "
                           "Use a new output, the same full input and a larger local slot serving identical weights.")
+    cli.add_argument("--seal-context-proof", type=Path, metavar="NEW_FILE",
+                     help="Only inspect original live local endpoints and selected rejected chats. "
+                          "Save their proof and print its SHA-256 before retiring a server.")
+    cli.add_argument("--context-proof", type=Path, help="Use an existing proof of the original endpoints.")
+    cli.add_argument("--context-proof-sha256", help="Exact SHA-256 printed when the original proof was sealed.")
     cli.add_argument("--verified-step-receipts", type=Path,
                      help="Load a separate verifier's registry of approved teaching operations or calculation plans. The run freezes this registry.")
     cli.add_argument("--reuse-matching-from", type=Path,
@@ -97,6 +102,15 @@ def main():
     args = vars(cli.parse_args())
     source = args.pop("input")
     output = args.pop("output")
+    seal = args.pop("seal_context_proof")
+    if seal is not None:
+        if (not args["recover_context_from"] or not args["case_ids"] or source or output or
+                args["context_proof"] or args["context_proof_sha256"]):
+            cli.error("--seal-context-proof requires --recover-context-from and --case-id, without run input/output")
+        print(json.dumps(seal_guided_overflows(args["recover_context_from"], seal, args["case_ids"])))
+        return 0
+    if source is None or output is None:
+        cli.error("a generation or export run requires --input and --output")
     if args["experience"]:
         args["experience"] = json.loads(
             args["experience"].read_text(encoding="utf-8-sig")

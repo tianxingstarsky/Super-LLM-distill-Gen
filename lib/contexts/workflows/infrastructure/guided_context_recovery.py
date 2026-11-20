@@ -110,38 +110,16 @@ def native_instance(endpoint, url, model):
     return signature, started, min(s["n_ctx"] for s in slots)
 
 
-def freeze_context_recovery(parent, current, selected, endpoints, location):
-    raw = (parent / "manifest.json").read_bytes()
+def _inspect_parent(parent, raw, selected, endpoints, location, *, confirm_listeners=False):
     prior = json.loads(raw)
     binding = digest(prior)
-    if {k: v for k, v in current.items() if k != "endpoints"} != {
-        k: v for k, v in prior.items() if k != "endpoints"
-    } or set(current["endpoints"]) != set(prior["endpoints"]):
-        raise ValueError("context recovery requires the full original input and frozen generation protocol")
-    changed = {}
     observed = {}
     for role, before in prior["endpoints"].items():
-        after = current["endpoints"][role]
-        if before != after and (
-            {k: v for k, v in before.items() if k not in {"url", "context_tokens"}}
-            != {k: v for k, v in after.items() if k not in {"url", "context_tokens"}}
-            or after["context_tokens"] <= before["context_tokens"]
-            or before["url"] == after["url"]
-        ):
-            raise ValueError("only a distinct local endpoint with an increased context may change")
-        pair = []
-        for spec in (before, after):
-            key = (spec["url"], spec["model"])
-            if key not in observed:
-                observed[key] = native_instance(endpoints[role], *key)
-            instance = observed[key]
-            if instance[2] != spec["context_tokens"]:
-                raise ValueError("original and recovery slots must both match their measured capacities")
-            pair.append(instance)
-        if pair[0][0] != pair[1][0]:
-            raise ValueError("native weights, template, build or generation settings differ")
-        if before != after:
-            changed[role] = pair[0][0]
+        key = (before["url"], before["model"])
+        if key not in observed:
+            observed[key] = native_instance(endpoints[role], *key)
+        if observed[key][2] != before["context_tokens"]:
+            raise ValueError("original slot differs from its frozen capacity")
     cases = {}
     for ident in sorted(selected):
         folder = location(parent, ident)
@@ -186,8 +164,7 @@ def freeze_context_recovery(parent, current, selected, endpoints, location):
                     raise ValueError("original case contains an unconfirmed or non-original response")
             else:
                 if (
-                    serving not in changed
-                    or role in {"final_answer", "strong_final_answer"}
+                    role in {"final_answer", "strong_final_answer"}
                     or event["status"] != "interrupted"
                     or "response" in event
                     or request.get("max_tokens") != before["max_tokens"]
@@ -198,10 +175,6 @@ def freeze_context_recovery(parent, current, selected, endpoints, location):
                 endpoint = endpoints[serving]
                 old_root = before["url"].rstrip("/").removesuffix("/v1")
                 tokens = endpoint.chat_prompt_tokens(request, root=old_root)
-                if tokens != endpoint.chat_prompt_tokens(request):
-                    raise ValueError(
-                        "the recovery server does not render the identical native token sequence"
-                    )
                 counts = dict(
                     prompt_tokens=len(tokens), output_tokens=before["max_tokens"], context_tokens=instance[2]
                 )
@@ -220,12 +193,11 @@ def freeze_context_recovery(parent, current, selected, endpoints, location):
                 }
                 if (
                     attempt != (legacy if stop["error"] == "ValueError" else typed)
-                    or not instance[2] < overflow <= current["endpoints"][serving]["context_tokens"]
+                    or not instance[2] < overflow
                 ):
                     raise ValueError("the exact parent request is not proven unsent and recoverable")
                 proof = {
                     **counts,
-                    "recovery_context_tokens": current["endpoints"][serving]["context_tokens"],
                     "tokens_sha256": digest(tokens),
                 }
             hashes[path.name] = hashlib.sha256(raw_request).hexdigest()
@@ -237,9 +209,106 @@ def freeze_context_recovery(parent, current, selected, endpoints, location):
             "preflight": proof,
             "stop_sha256": hashlib.sha256(stop_bytes).hexdigest(),
         }
+    if confirm_listeners:
+        for (url, model), prior_instance in observed.items():
+            role = next(r for r, s in prior["endpoints"].items() if (s["url"], s["model"]) == (url, model))
+            if native_instance(endpoints[role], url, model) != prior_instance:
+                raise ValueError("original native listener changed while witnessing the failed requests")
     return {
+        "schema": "guided-local-overflow-proof/v1",
         "source_binding": binding,
         "source_manifest_sha256": hashlib.sha256(raw).hexdigest(),
         "native_models": {r: observed[(v["url"], v["model"])][0] for r, v in prior["endpoints"].items()},
+        "process_started": {r: observed[(v["url"], v["model"])][1] for r, v in prior["endpoints"].items()},
         "cases": cases,
     }
+
+
+def seal_context_proof(parent, output, selected, location):
+    """Witness the original listener and exact rejected prompts before retiring it."""
+    if not selected or len(set(selected)) != len(selected):
+        raise ValueError("seal one or more distinct original case IDs")
+    if output.resolve().is_relative_to(parent.resolve()):
+        raise ValueError("write the sealed proof outside the original run")
+    if output.exists():
+        raise FileExistsError(output)
+    raw = (parent / "manifest.json").read_bytes()
+    specs = json.loads(raw)["endpoints"]
+    readers = {
+        role: GuidedChatEndpoint(spec["url"], spec["model"], None, spec["max_tokens"],
+                                 local=True, context=spec["context_tokens"], pool=None)
+        for role, spec in specs.items()
+    }
+    proof = _inspect_parent(parent, raw, selected, readers, location, confirm_listeners=True)
+    wire = json.dumps(proof, ensure_ascii=False, sort_keys=True, indent=2).encode()
+    with output.open("xb") as file:
+        file.write(wire)
+    return {"sha256": hashlib.sha256(wire).hexdigest(), "cases": len(selected)}
+
+
+def freeze_context_recovery(parent, current, selected, endpoints, location, proof_path=None, proof_sha256=None):
+    raw = (parent / "manifest.json").read_bytes()
+    prior = json.loads(raw)
+    if {k: v for k, v in current.items() if k != "endpoints"} != {
+        k: v for k, v in prior.items() if k != "endpoints"
+    } or set(current["endpoints"]) != set(prior["endpoints"]):
+        raise ValueError("context recovery requires the full original input and frozen generation protocol")
+    if proof_path is None:
+        proof = _inspect_parent(parent, raw, selected, endpoints, location)
+    else:
+        wire = proof_path.read_bytes()
+        if hashlib.sha256(wire).hexdigest() != proof_sha256:
+            raise ValueError("recovery proof does not match the pinned SHA-256")
+        proof = json.loads(wire)
+        if (proof["schema"] != "guided-local-overflow-proof/v1" or proof["source_binding"] != digest(prior)
+                or proof["source_manifest_sha256"] != hashlib.sha256(raw).hexdigest()
+                or set(selected) - proof["cases"].keys()):
+            raise ValueError("sealed proof does not cover this source run and selected cases")
+
+    observed = {}
+    for role, before in prior["endpoints"].items():
+        after = current["endpoints"][role]
+        if before != after and (
+            {k: v for k, v in before.items() if k not in {"url", "context_tokens"}}
+            != {k: v for k, v in after.items() if k not in {"url", "context_tokens"}}
+            or after["context_tokens"] <= before["context_tokens"]
+            or (before["url"] == after["url"] and proof_path is None)
+        ):
+            raise ValueError("only a local replacement with an increased context may change")
+        key = (after["url"], after["model"])
+        if key not in observed:
+            observed[key] = native_instance(endpoints[role], *key)
+        signature, started, capacity = observed[key]
+        if capacity != after["context_tokens"] or signature != proof["native_models"][role]:
+            raise ValueError("native weights, template, build, generation settings or measured slot differ")
+        if before != after and before["url"] == after["url"] and started <= proof["process_started"][role]:
+            raise ValueError("same-address replacement requires a new native listener after sealing the original")
+
+    cases = {}
+    for ident in sorted(selected):
+        folder = location(parent, ident)
+        case = proof["cases"][ident]
+        if proof_path is not None:
+            if ((folder / "case.json").exists()
+                    or hashlib.sha256((folder / "interruption.json").read_bytes()).hexdigest() != case["stop_sha256"]
+                    or {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in folder.glob("[0-9]*-*.json")}
+                    != case["receipts"]):
+                raise ValueError("original interruption or call receipts differ from the sealed proof")
+        failed = (folder / case["failed"]).read_bytes()
+        if hashlib.sha256(failed).hexdigest() != case["receipts"][case["failed"]]:
+            raise ValueError("the original rejected request changed")
+        event = json.loads(failed)
+        role = endpoint_role(event["role"])
+        tokens = endpoints[role].chat_prompt_tokens(event["request"])
+        check = case["preflight"]
+        if len(tokens) != check["prompt_tokens"] or digest(tokens) != check["tokens_sha256"]:
+            raise ValueError("the recovery server does not render the identical native token sequence")
+        capacity = current["endpoints"][role]["context_tokens"]
+        if not check["context_tokens"] < len(tokens) + check["output_tokens"] <= capacity:
+            raise ValueError("the full original request and output reservation do not fit the recovery slot")
+        cases[ident] = {**case, "preflight": {**check, "recovery_context_tokens": capacity}}
+    result = {k: proof[k] for k in ("source_binding", "source_manifest_sha256", "native_models")}
+    result["cases"] = cases
+    if proof_path is not None:
+        result["source_proof_sha256"] = proof_sha256
+    return result
