@@ -82,6 +82,7 @@ def main():
                      "4.10.9 reuses the current student instruction when the selected local task is already in the request. "
                      "4.10.10 separates prior tutoring, the current task, verified progress and predicted behavior. "
                      "4.10.11 also gives the tutor and hint reviewer the learner's actual local submission contract. "
+                     "4.10.12 identifies leaked operation names in their public text for the existing revision. "
                      "Pin the same version in both arms of an experience comparison. Existing runs use their manifest.")
     cli.add_argument("--recover-context-from", type=Path, metavar="PARENT",
                      help="Finish selected cases stopped before a local chat dispatch exceeded its slot. "
