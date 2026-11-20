@@ -51,7 +51,9 @@ def main():
     cli.add_argument(
         "--experience",
         type=Path,
-        help="Frozen version and optional student instruction string; private coach uses the review protocol",
+        help="Path to the frozen experience JSON for this run. disclosure_teacher guides the author of "
+             "the next hint. Student and final-answer teacher use their own settings. Use a new output "
+             "directory to compare editions.",
     )
     cli.add_argument("--export-only", action="store_true")
     phase = cli.add_mutually_exclusive_group()
@@ -67,7 +69,9 @@ def main():
     cli.add_argument("--historical-first-input", type=Path,
                      help="Original full input JSONL for a subset of a historical first-pass run. "
                           "Its file digest must match the source manifest.")
-    cli.add_argument("--protocol-version", help="Pin a protocol for a new run. The default 4.10.0 supports source-verified calculation plans. Existing runs use their manifest.")
+    cli.add_argument("--protocol-version", help="Pin a protocol for a new run. 4.10.0 supports verified calculation plans. "
+                     "4.10.1 also supports worked teaching operations and attested rule-proof steps. "
+                     "Pin the same version in both arms of an experience comparison. Existing runs use their manifest.")
     cli.add_argument("--recover-context-from", type=Path, metavar="PARENT",
                      help="Finish selected cases stopped before a local chat dispatch exceeded its slot. "
                           "Use a new output, the same full input and a larger local slot serving identical weights.")
