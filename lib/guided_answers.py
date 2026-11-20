@@ -79,6 +79,7 @@ def main():
                      "4.10.6 requires typed fields for fixed-position and trial-hours reports. "
                      "4.10.7 predicts the learner's next response from published material, sharing the local tutor endpoint. "
                      "4.10.8 lets the predictor choose a visible source even when the learner's eventual result is uncertain. "
+                     "4.10.9 reuses the current student instruction when the selected local task is already in the request. "
                      "Pin the same version in both arms of an experience comparison. Existing runs use their manifest.")
     cli.add_argument("--recover-context-from", type=Path, metavar="PARENT",
                      help="Finish selected cases stopped before a local chat dispatch exceeded its slot. "

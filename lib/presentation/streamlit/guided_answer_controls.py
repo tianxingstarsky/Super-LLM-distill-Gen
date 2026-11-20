@@ -66,13 +66,13 @@ def render_guided_answer_cli(binding, endpoints, *, key, reviewer=None):
         workers = min(4, max(1, int(info.get("max_concurrency") or 1)))
         teacher_endpoint = endpoints[teacher[0]]
         thinking_flag = "--coach-thinking" if teacher_thinking else "--no-coach-thinking"
-        output_dir = ".dataforge/guided-behavior-v4108" if predict_behavior else ".dataforge/guided-example"
+        output_dir = ".dataforge/guided-behavior-v4109" if predict_behavior else ".dataforge/guided-example"
         command = ["python -m lib.guided_answers", f"--input guided-example.jsonl --output {output_dir}",
                    f"--student-url {_powershell_literal(url)} --student-model {_powershell_literal(model)}",
                    f"--coach-url {_powershell_literal(teacher_endpoint['base_url'])} --coach-model {_powershell_literal(teacher[1])}",
                    f"--context-tokens {context} --max-tokens {output} --workers {workers} {thinking_flag}"]
         if predict_behavior:
-            command.append("--protocol-version 4.10.8")
+            command.append("--protocol-version 4.10.9")
         variables = []
         for role, ep in (("student", endpoint), ("coach", teacher_endpoint)):
             credential = ep.get("api_key", {}).get("source", "")
