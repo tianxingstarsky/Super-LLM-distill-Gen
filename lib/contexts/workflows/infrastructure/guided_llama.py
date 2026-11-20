@@ -56,6 +56,14 @@ class GuidedAdmissionTimeout(ModelQueueTimeout):
     """The generation request was never sent because a lease was not granted."""
 
 
+class GuidedPromptOverflow(ValueError):
+    """Local tokenization rejected the unchanged chat before any generation dispatch."""
+
+    def __init__(self, prompt_tokens, output_tokens, context_tokens):
+        super().__init__("complete transcript plus output reservation exceeds the native slot")
+        self.counts = {"prompt_tokens": prompt_tokens, "output_tokens": output_tokens, "context_tokens": context_tokens}
+
+
 class GuidedChatEndpoint:
     def __init__(
         self,
@@ -297,31 +305,9 @@ class GuidedChatEndpoint:
                         **self._response_model(raw, native=True), context_tokens=self.context,
                         estimated_prompt_tokens=len(data["prompt"]), max_tokens=self.cap,
                         server_timing=raw.get("timings"), transport="llama.cpp/completion")
-        prompt_count = None
-        if self.local:
-            rendered = self.http(
-                self.root + "/apply-template",
-                {
-                    "messages": data["messages"],
-                    "chat_template_kwargs": data["chat_template_kwargs"],
-                    "add_generation_prompt": True,
-                },
-            )["prompt"]
-            if any(
-                turn["content"] not in rendered
-                for turn in data["messages"]
-                if turn["role"] == "tool"
-            ):
-                raise ValueError("native chat template lost a visible revision prompt")
-            tokens = self.http(
-                self.root + "/tokenize",
-                {"content": rendered, "add_special": True, "parse_special": True},
-            )
-            prompt_count = len(tokens["tokens"])
-            if prompt_count + self.cap > self.context:
-                raise ValueError(
-                    "complete transcript plus output reservation exceeds the native slot"
-                )
+        prompt_count = len(self.chat_prompt_tokens(data)) if self.local else None
+        if prompt_count is not None and prompt_count + self.cap > self.context:
+            raise GuidedPromptOverflow(prompt_count, self.cap, self.context)
         raw = self._generate("/v1/chat/completions", data)
         chosen = raw["choices"][0]
         msg = chosen["message"]
@@ -357,3 +343,15 @@ class GuidedChatEndpoint:
                 "structured_output": structured, "finish_reason": chosen.get("finish_reason"),
             }
         return result
+
+    def chat_prompt_tokens(self, data, *, root=None):
+        root = root or self.root
+        rendered = self.http(root + "/apply-template", {
+            "messages": data["messages"], "chat_template_kwargs": data["chat_template_kwargs"],
+            "add_generation_prompt": True,
+        })["prompt"]
+        if any(turn["content"] not in rendered for turn in data["messages"] if turn["role"] == "tool"):
+            raise ValueError("native chat template lost a visible revision prompt")
+        return self.http(root + "/tokenize", {
+            "content": rendered, "add_special": True, "parse_special": True,
+        })["tokens"]

@@ -58,6 +58,7 @@ def generate_guided_cases(
     reuse_worked_first_from=None,
     verified_step_receipts=None,
     reuse_matching_from=None,
+    recover_context_from=None,
     historical_first_from=None,
     historical_first_input=None,
 ):
@@ -134,6 +135,7 @@ def generate_guided_cases(
         reuse_worked_first_from=reuse_worked_first_from,
         verified_step_receipts=verified_step_receipts,
         reuse_matching_from=reuse_matching_from,
+        recover_context_from=recover_context_from,
         historical_first_from=historical_first_from,
         historical_first_input=historical_first_input,
     )

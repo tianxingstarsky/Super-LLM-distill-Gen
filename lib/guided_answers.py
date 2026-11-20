@@ -68,6 +68,9 @@ def main():
                      help="Original full input JSONL for a subset of a historical first-pass run. "
                           "Its file digest must match the source manifest.")
     cli.add_argument("--protocol-version", help="Pin a protocol for a new run. The default 4.10.0 supports source-verified calculation plans. Existing runs use their manifest.")
+    cli.add_argument("--recover-context-from", type=Path, metavar="PARENT",
+                     help="Finish selected cases stopped before a local chat dispatch exceeded its slot. "
+                          "Use a new output, the same full input and a larger local slot serving identical weights.")
     cli.add_argument("--verified-step-receipts", type=Path,
                      help="Load a separate verifier's registry of approved teaching operations or calculation plans. The run freezes this registry.")
     cli.add_argument("--reuse-matching-from", type=Path,

@@ -28,7 +28,8 @@ from ..domain.guided_final_experience import adopted_final_teacher_text
 from ..domain.guided_training_targets import (
     GUIDED_TARGET_FILE, GUIDED_TARGET_SCHEMA, GUIDED_TARGET_VERSIONS, GuidedTargetHeld, guided_training_target,
 )
-from .guided_llama import DIRECT_ANSWER_GRAMMARS, GuidedAdmissionTimeout, GuidedChatEndpoint, wire_body
+from .guided_llama import DIRECT_ANSWER_GRAMMARS, GuidedAdmissionTimeout, GuidedChatEndpoint, GuidedPromptOverflow, wire_body
+from .guided_context_recovery import endpoint_role, freeze_context_recovery
 from .guided_historical_answer import (
     HISTORICAL_FIRST, checked_historical_answer, historical_source_manifest, historical_source_membership,
     import_historical_answer,
@@ -225,18 +226,24 @@ def replay_first(path, ident, payload, prior_binding, *, expected_receipt_sha256
     }
 
 
-def replay_matching_call(root, ident, role, index, payload, prior_binding):
+def replay_matching_call(root, ident, role, index, payload, prior_binding, *, expected_sha256=None):
     relative = location(Path("."), ident) / f"{index:03}-{role}.json"
     path = root / relative
     if not path.exists():
+        if expected_sha256:
+            raise ValueError("pinned context recovery response is missing")
         return None
     raw = path.read_bytes()
+    if expected_sha256 and hashlib.sha256(raw).hexdigest() != expected_sha256:
+        raise ValueError("pinned context recovery response has changed")
     prior = json.loads(raw)
     envelope = {"binding": prior_binding, "id": ident, "payload": prior["request"]}
     if prior["identity"] != digest(envelope) or (prior["role"], prior["attempt"]) != (role, index):
         raise ValueError("prior guided receipt does not match its original task and role")
     wire = wire_body(payload)
     if wire != wire_body(prior["request"]):
+        if expected_sha256:
+            raise ValueError("context recovery cannot regenerate a previously completed request")
         return None
     if prior.get("origin"):
         raise ValueError("matching receipt is itself a replay; use its original run for this call")
@@ -271,6 +278,7 @@ def run_guided_cases(
     reuse_worked_first_from=None,
     verified_step_receipts=None,
     reuse_matching_from=None,
+    recover_context_from=None,
     historical_first_from=None,
     historical_first_input=None,
 ):
@@ -283,6 +291,10 @@ def run_guided_cases(
                                  or not case_ids or not all(isinstance(ident, str) and ident for ident in case_ids)):
         raise ValueError("case selection requires one or more source IDs")
     selected = frozenset(case_ids) if case_ids is not None else None
+    if recover_context_from and (not selected or any((reuse_matching_from, reuse_first_from, reuse_worked_first_from,
+            historical_first_from, historical_first_input, retry_interrupted, first_pass_only, prefetch_worked_first))
+            or recover_context_from.resolve() == output.resolve()):
+        raise ValueError("context recovery requires selected cases and a separate output without other replay or retry modes")
     output.mkdir(parents=True, exist_ok=True)
     with FileLock(str(output / "run.lock"), timeout=0):
         manifest = output / "manifest.json"
@@ -435,6 +447,10 @@ def run_guided_cases(
                 pending_manifest.write_bytes(prior_bytes)
                 pending_manifest.replace(archived_manifest)
         matching_roles = set()
+        recovery = None
+        if recover_context_from:
+            recovery = freeze_context_recovery(recover_context_from, config, selected, endpoints, location)
+            config["context_recovery"] = recovery
         if reuse_matching_from:
             if reuse_matching_from.resolve() == output.resolve():
                 raise ValueError("cross-run replay requires a different source run")
@@ -511,6 +527,8 @@ def run_guided_cases(
             interruption = folder / "interruption.json"
             current_checkpoint = None
             resumed_interruption = False
+            parent_case = recovery["cases"][source["id"]] if recovery else None
+            visited_parents = set()
             if receipt.exists():
                 if read(receipt)["binding"] != binding:
                     raise ValueError("completed case has different run binding")
@@ -521,10 +539,7 @@ def run_guided_cases(
                 checkpoint = folder / f"{index:03}-{role}.json"
                 current_checkpoint = checkpoint.name
                 native_final = role in {"final_answer", "strong_final_answer"}
-                serving_role = {"student": "student", "student_step": "student", "final_answer": "student",
-                                "verified_answer": "student", "verified_answer_retry": "student",
-                                "verified_strong_answer": "continuation",
-                                "strong_continuation": "continuation", "strong_final_answer": "continuation"}.get(role, "coach")
+                serving_role = endpoint_role(role)
                 endpoint = endpoints[serving_role]
                 payload = (endpoint.final_answer_payload(messages) if native_final
                            else endpoint.payload(messages, schema))
@@ -542,6 +557,21 @@ def run_guided_cases(
                     {"binding": binding, "id": source["id"], "payload": payload}
                 )
                 saved = read(checkpoint) if checkpoint.exists() else {}
+                pinned = parent_case["receipts"] if parent_case else {}
+                previous_hash = pinned.get(checkpoint.name)
+                if parent_case and (checkpoint.name == parent_case["failed"] or previous_hash is None):
+                    required = set(pinned)
+                    if checkpoint.name == parent_case["failed"]:
+                        required.remove(checkpoint.name)
+                    if not required.issubset(visited_parents):
+                        raise ValueError("context recovery did not replay the original calls in execution order")
+                    if previous_hash:
+                        raw = (location(recover_context_from, source["id"]) / checkpoint.name).read_bytes()
+                        if (hashlib.sha256(raw).hexdigest() != previous_hash or
+                                wire_body(json.loads(raw)["request"]) != wire_body(payload)):
+                            raise ValueError("recovered request differs from the exact preflight rejection")
+                if previous_hash:
+                    visited_parents.add(checkpoint.name)
                 if first_direct and historical_mode:
                     history = config["historical_first"]
                     if not saved:
@@ -558,6 +588,11 @@ def run_guided_cases(
                 if saved and saved["identity"] != identity:
                     raise ValueError("request differs from its saved checkpoint")
                 if saved.get("status") == "complete":
+                    if parent_case and previous_hash and checkpoint.name != parent_case["failed"]:
+                        origin = saved.get("origin") or {}
+                        if (origin.get("source_receipt_sha256") != previous_hash
+                                or origin.get("response_sha256") != digest(saved["response"])):
+                            raise ValueError("saved recovery response does not match its pinned parent")
                     return guided_port_response(saved["response"], payload, role, template_version)
                 if saved and not retry_interrupted and not can_resume_admission(saved, binding, source["id"], role, index):
                     raise RuntimeError(
@@ -571,7 +606,10 @@ def run_guided_cases(
                     )
                 previous = saved.get("attempts", [])
                 replayed = None
-                if (reuse_first_from and role == "student" and index == 1
+                if parent_case and previous_hash and checkpoint.name != parent_case["failed"]:
+                    replayed = replay_matching_call(recover_context_from, source["id"], role, index, payload,
+                                                    recovery["source_binding"], expected_sha256=previous_hash)
+                elif (reuse_first_from and role == "student" and index == 1
                         and (template_version not in GUIDED_DELIVERY_VERSIONS or first_direct)):
                     replayed = replay_first(
                         reuse_first_from,
@@ -624,6 +662,12 @@ def run_guided_cases(
                     event["attempts"][-1] = {
                         "status": "awaiting_capacity", "code": ModelQueueTimeout.code, "model_request_sent": False,
                     }
+                    atomic_json(checkpoint, event)
+                    raise
+                except GuidedPromptOverflow as overflow:
+                    event["status"] = "interrupted"
+                    event["attempts"][-1] = {"status":"preflight_rejected","error":"GuidedPromptOverflow",
+                                            "model_request_sent":False,**overflow.counts}
                     atomic_json(checkpoint, event)
                     raise
                 except Exception as err:
@@ -679,6 +723,8 @@ def run_guided_cases(
                 if resumed_interruption:
                     interruption.unlink(missing_ok=True)
                 return
+            if parent_case and set(parent_case["receipts"]) != visited_parents:
+                raise ValueError("recovered case ended without consuming its bound parent history")
             if historical_mode:
                 result["first_answer_origin"] = read(folder / "001-student.json")["origin"]
             if template_version in GUIDED_TARGET_VERSIONS:
