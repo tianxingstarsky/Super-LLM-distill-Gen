@@ -245,8 +245,19 @@ def test_local_reports_and_obstacles_flow_to_the_next_tutor_and_whole_answer(tmp
         assert not attempt["local_step"]["independent_derivation_checked"]
         assert "Final answer:" not in inputs["student",n][0]["content"]
     assert "Final answer:" in inputs["student",4][0]["content"]
-    assert '["10","01"]' in inputs["student",4][-1]["content"]
     fields = case["shared_student_findings"]
+    if version == "4.10.10":
+        returned = inputs["student",4]
+        assert returned[-1] == {"role": "user", "content": source["question"]}
+        assert returned[-2]["role"] == "user"
+        memory = json.loads(returned[-2]["content"])
+        assert memory["source"] == "tutoring_program"
+        assert memory["confirmed_student_findings"] == [field["text"] for field in fields]
+        assert '["10","01"]' in memory["confirmed_student_findings"]
+        assert memory["teacher_disclosures"] == [hint["text"] for hint in case["disclosures"]]
+        assert set(memory["teacher_disclosures"]).isdisjoint(memory["confirmed_student_findings"])
+    else:
+        assert '["10","01"]' in inputs["student",4][-1]["content"]
     assert len(fields) == 1 + (status == "verified_local_value")
     for item in fields:
         raw = case["attempts"][item["source_attempt"]-1]["student"]["content"]
