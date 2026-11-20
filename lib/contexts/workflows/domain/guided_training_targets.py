@@ -10,7 +10,7 @@ from .guided_teaching_steps import certified_complete_disclosure, certified_rule
 
 GUIDED_TARGET_FILE = "training-targets.jsonl"
 GUIDED_TARGET_SCHEMA = "guided-training-target/v1"
-GUIDED_TARGET_VERSIONS = frozenset({"4.9.1", "4.10.0", "4.10.1", "4.10.2", "4.10.3", "4.10.4", "4.10.5", "4.10.6"})
+GUIDED_TARGET_VERSIONS = frozenset({"4.9.1", "4.10.0", "4.10.1", "4.10.2", "4.10.3", "4.10.4", "4.10.5", "4.10.6", "4.10.7"})
 
 
 class GuidedTargetHeld(ValueError):
@@ -50,7 +50,7 @@ def _reviewed_segments(case):
     return assemble(segments).rstrip(), spans
 
 
-def _correction_prompt(question, attempts, chinese):
+def _correction_prompt(question, attempts, chinese, next_guidance):
     # This is an offline exercise. Attribute the quoted observations inside
     # its prompt, without fabricating live user, assistant or tool messages.
     history = []
@@ -62,10 +62,16 @@ def _correction_prompt(question, attempts, chinese):
             turn["student_delivery"] = attempt["formal_answer"]["response"]["content"]
         if attempt.get("disclosure"):
             turn["published_tutor_guidance"] = attempt["disclosure"]["text"]
+        if guidance := next_guidance.get(attempt["attempt"] + 1):
+            turn["predictor_guidance_for_next_attempt"] = json.loads(guidance["content"])
         history.append(turn)
     instruction = ("请根据原题和以下历史材料修正作答。学生旧稿可能有误；提示来自辅导教师。"
                    if chinese else "Correct the solution to the original task using the recorded drafts "
                    "and guidance below. Earlier student work may contain errors.")
+    if next_guidance:
+        instruction = ("请根据原题和历史材料修正作答。学生旧稿可能有误。材料分别标明已发布的教师提示和预测器选择的执行引导。"
+                       if chinese else "Correct the solution using the original task and recorded history. "
+                       "Earlier drafts may contain errors. Tutor hints and execution guidance selected by the predictor are labeled separately.")
     return question + "\n\n" + instruction + "\n" + json.dumps(history, ensure_ascii=False, indent=2)
 
 
@@ -146,6 +152,11 @@ def guided_training_target(case, case_archive, trusted_solution_receipts, *, cal
             raise ValueError("independent training requires the original question without tutor material")
     provenance = {"schema": GUIDED_TARGET_SCHEMA, "case_archive": case_archive,
                   "case_binding": case["binding"], "source_sha256": case["source_sha256"]}
+    behavior_guidance = {a["attempt"]: a["behavior_prediction"]["student_guidance"] for a in attempts
+                         if (a.get("behavior_prediction") or {}).get("student_guidance")}
+    if behavior_guidance:
+        provenance["behavior_guidance_receipts"] = [
+            {"predictor": f"{n:03}-behavior_prediction.json", "student": f"{n:03}-student.json"} for n in behavior_guidance]
     if "calculation_tutoring" in case:
         return _calculation_target(case, calculation_steps, provenance)
     target = {"role": "assistant", "content": answer}
@@ -159,7 +170,7 @@ def guided_training_target(case, case_archive, trusted_solution_receipts, *, cal
         origin = case["final_answer_provenance"]
         role = last.get("solving_role", "student")
         strong_handoff = case.get("protocol") in {
-            "guided-draft-snapshot/v4.10.2", "guided-draft-snapshot/v4.10.3", "guided-draft-snapshot/v4.10.4", "guided-draft-snapshot/v4.10.5", "guided-draft-snapshot/v4.10.6"} and role == "strong_continuation"
+            "guided-draft-snapshot/v4.10.2", "guided-draft-snapshot/v4.10.3", "guided-draft-snapshot/v4.10.4", "guided-draft-snapshot/v4.10.5", "guided-draft-snapshot/v4.10.6", "guided-draft-snapshot/v4.10.7"} and role == "strong_continuation"
         if (origin != formal["provenance"] or origin["author"] != role or not origin["model"]
                 or formal["response"].get("model") != origin["model"] or last["student"].get("model") != origin["model"]
                 or formal["response"]["content"] != answer or formal["check"]["format_ok"] is not True
@@ -176,7 +187,7 @@ def guided_training_target(case, case_archive, trusted_solution_receipts, *, cal
             reference = certified_complete_disclosure(case, trusted_solution_receipts)
         if staged:
             expected = certified_rule_prefixes(question, reference)
-            if (case.get("protocol") not in {"guided-draft-snapshot/v4.10.1", "guided-draft-snapshot/v4.10.2", "guided-draft-snapshot/v4.10.3", "guided-draft-snapshot/v4.10.4", "guided-draft-snapshot/v4.10.5", "guided-draft-snapshot/v4.10.6"}
+            if (case.get("protocol") not in {"guided-draft-snapshot/v4.10.1", "guided-draft-snapshot/v4.10.2", "guided-draft-snapshot/v4.10.3", "guided-draft-snapshot/v4.10.4", "guided-draft-snapshot/v4.10.5", "guided-draft-snapshot/v4.10.6", "guided-draft-snapshot/v4.10.7"}
                     or len(staged) > len(expected)
                     or any(any(actual.get(k) != v for k, v in planned.items())
                            for actual, planned in zip(staged, expected))):
@@ -219,7 +230,7 @@ def guided_training_target(case, case_archive, trusted_solution_receipts, *, cal
             if not independent:
                 language = str(case["source"].get("language") or "").lower()
                 chinese = language.startswith("zh") if language else any("\u4e00" <= ch <= "\u9fff" for ch in question)
-                question = _correction_prompt(question, attempts[:-1], chinese)
+                question = _correction_prompt(question, attempts[:-1], chinese, behavior_guidance)
                 if full:
                     label = "作答前已给出的完整辅导内容" if chinese else "Complete guidance seen before answering"
                     question += "\n\n" + label + "\n" + reference["worked_solution"] + "\n" + reference["answer"]
@@ -227,7 +238,7 @@ def guided_training_target(case, case_archive, trusted_solution_receipts, *, cal
         raise GuidedTargetHeld("chat_delimiter_in_training_text")
     messages = [{"role": "system", "content": case["task_system"]}] if case.get("task_system") else []
     if case.get("protocol") in {"guided-draft-snapshot/v4.10.0", "guided-draft-snapshot/v4.10.1",
-                                "guided-draft-snapshot/v4.10.2", "guided-draft-snapshot/v4.10.3", "guided-draft-snapshot/v4.10.4", "guided-draft-snapshot/v4.10.5", "guided-draft-snapshot/v4.10.6"}:
+                                "guided-draft-snapshot/v4.10.2", "guided-draft-snapshot/v4.10.3", "guided-draft-snapshot/v4.10.4", "guided-draft-snapshot/v4.10.5", "guided-draft-snapshot/v4.10.6", "guided-draft-snapshot/v4.10.7"}:
         provenance["evidence_basis"] = {"independent_answer": "independent_answer_key",
                                         "teacher_demonstration": "verified_source_solution"}.get(
                                             objective, "answer_key_and_tutor_review")

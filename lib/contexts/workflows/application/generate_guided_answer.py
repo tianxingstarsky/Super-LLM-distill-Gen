@@ -11,6 +11,10 @@ from .review_guided_disclosure import (
     author_next_disclosure, eligible_teaching_steps, review_next_disclosure, review_or_recommend_disclosure,
 )
 from .repair_guided_student_evidence import check_or_repair_student_findings
+from ..domain.guided_behavior_prediction import (
+    BEHAVIOR_PREDICTION_SCHEMA, observe_prediction, prediction_due, prediction_guidance,
+    prediction_messages, prediction_visible,
+)
 from ..domain.guided_disclosure import RENDERED_CONTINUATION_VERSIONS, render_student_continuation
 from ..domain.guided_quantity_scope import storage_quantity_findings, storage_quantity_issue
 from ..domain.guided_local_steps import (
@@ -90,7 +94,7 @@ class GenerateGuidedAnswer:
         language = str(source.get("source", {}).get("language") or "").lower()
         chinese = language.startswith("zh") if language else any("\u4e00" <= ch <= "\u9fff" for ch in question)
         evidenced_progress = protocol_version in EVIDENCED_PROGRESS_VERSIONS
-        fixed_fields = protocol_version == "4.10.6"
+        fixed_fields = protocol_version in {"4.10.6", "4.10.7"}
         scoped_local = fixed_fields or protocol_version == "4.10.5"
         immutable_review = scoped_local or protocol_version == "4.10.4"
         local_steps = immutable_review or protocol_version == "4.10.3"
@@ -142,7 +146,8 @@ class GenerateGuidedAnswer:
                     "4.7.1": "v4.7.1", "4.8.0": "v4.8", "4.8.1": "v4.8.1",
                     "4.8.2": "v4.8.2", "4.8.3": "v4.8.3", "4.9.0": "v4.9", "4.9.1": "v4.9.1",
                     "4.10.0": "v4.10.0", "4.10.1": "v4.10.1", "4.10.2": "v4.10.2",
-                    "4.10.3": "v4.10.3", "4.10.4": "v4.10.4", "4.10.5": "v4.10.5", "4.10.6": "v4.10.6"}[protocol_version]
+                    "4.10.3": "v4.10.3", "4.10.4": "v4.10.4", "4.10.5": "v4.10.5", "4.10.6": "v4.10.6",
+                    "4.10.7": "v4.10.7"}[protocol_version]
         tutor_instruction = SINGLE_DECISION_REVIEW if single_decision else ANCHORED_REVIEW if anchored else COACH
         if grounded:
             tutor_instruction += "\n\n" + GROUNDED_STUDENT_REVIEW
@@ -289,6 +294,20 @@ class GenerateGuidedAnswer:
                     task_system, student_experience, instruction)))}
             if disclosed and skip_acquired:
                 public.append(messages[-1])
+            prediction = None
+            if prediction_due(protocol_version, attempts[-1] if attempts else None, disclosed,
+                              received_full=send_full, solver_role=next_solver):
+                visible = prediction_visible(question, disclosed, active, findings.values(),
+                                             local_task=local_target["request"] if local_target else None)
+                response = self.request("behavior_prediction", index, prediction_messages(visible), BEHAVIOR_PREDICTION_SCHEMA)
+                forecast, guidance = prediction_guidance(response, visible, chinese=chinese)
+                forecast_learner = expected_first_model or attempts[0]["student"].get("model")
+                prediction = {"checkpoint": {"role": "behavior_prediction", "attempt": index},
+                              "disclosure_ordinal": disclosed[-1]["ordinal"], "visible": visible, "response": response,
+                              "forecast": forecast, "student_guidance": guidance}
+                if guidance:
+                    messages = [*messages, guidance]
+                    public.append(guidance)
             student = self.request(next_solver, index, messages, submission_schema)
             if stop_after_first_student_receipt:
                 # The request port has durably recorded this exact response. Leave all
@@ -302,6 +321,10 @@ class GenerateGuidedAnswer:
                 hint_to_student=None,
             )
             attempts.append(attempt)
+            if prediction:
+                attempt["behavior_prediction"] = prediction
+                prediction["observation"] = observe_prediction(prediction["forecast"], attempt, question=question,
+                                                               gold=gold, expected_model=forecast_learner)
             if send_full:
                 attempt["solving_role"] = next_solver
                 attempt["solver_input_evidence"] = {
@@ -408,6 +431,9 @@ class GenerateGuidedAnswer:
             attempt["check"] = check
             if local_target:
                 check.update(format_ok=False, answer=None, answer_matches=None, issue="local_step_only")
+            if prediction:
+                prediction["observation"] = observe_prediction(prediction["forecast"], attempt, question=question,
+                                                               gold=gold, expected_model=forecast_learner)
             if not local_target and protocol_version in CALCULATION_PLAN_VERSIONS and observe_draft_candidates and not check["format_ok"]:
                 draft_candidate = latest_marked_draft_candidate(suffix)
                 if draft_candidate:

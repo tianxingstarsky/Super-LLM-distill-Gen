@@ -3,12 +3,15 @@ import json
 import pytest
 from jsonschema import Draft202012Validator
 
+from lib.contexts.workflows.application.generate_guided_answer import GenerateGuidedAnswer
 from lib.contexts.workflows.domain.guided_answers import validate_source
+from lib.contexts.workflows.domain.guided_behavior_prediction import prediction_due
 from lib.contexts.workflows.domain.guided_local_steps import (
     LOCAL_SUBMISSION_SCHEMA, check_local_step, dispatched_local_guidance, local_step_target, local_submission_schema,
     scoped_local_messages,
 )
 from lib.contexts.workflows.domain.guided_teaching_steps import verified_steps_digest
+from lib.contexts.workflows.domain.guided_training_targets import guided_training_target
 from lib.contexts.workflows.infrastructure.guided_answer_records import location, run_guided_cases
 from lib.contexts.workflows.infrastructure.guided_teacher_feedback import TeacherFeedbackStore
 
@@ -243,3 +246,90 @@ def test_portfolio_substep_checks_the_selected_projects_hours_and_updated_cap():
         assert all("optimal" not in item["text"] for item in facts.values())
     duplicate = json.dumps(submitted).replace('"new_limit": 16', '"new_limit": 16, "new_limit": 16')
     assert check_local_step(named, {"content":duplicate,"finish_reason":"stop"}, 2, scoped=True)[0]["status"] == "unverified"
+
+
+def test_predictor_observes_only_public_work_and_actual_learner_feedback_reaches_next_tutor():
+    source, receipt = signed_source()
+    source["source_reasoning"] = "PRIVATE_REFERENCE_SENTINEL"
+    steps = source["verified_teaching_steps"]["steps"]
+    hints = ["Separate the replacement slot from its former setting.", "Try each value of the first linked slot."]
+    calls = []
+    student_requests, predictions = {}, {}
+    def request(role, index, messages, schema):
+        calls.append((role, index))
+        if role == "student":
+            student_requests[index] = messages
+            assert all("PRIVATE_FORECAST" not in m["content"] for m in messages)
+            if index == 2:
+                assert [m["role"] for m in messages] == ["system", "user", "user"]
+                guide = json.loads(messages[-1]["content"])
+                assert guide["origin"] == "behavior_predictor_guidance"
+                assert guide["quoted_visible_evidence"] == json.loads(messages[1]["content"])["current_local_task"]
+            if index == 3:
+                assert [m["role"] for m in messages] == ["system", "user"]
+            reply = {1:"8", 2:'{"action":"report","values":{"position":2,"former_bit":1,"current_bit":0},"explanation":"PRIVATE_LEARNER_DRAFT: I also guess seven."}',
+                     3:"I am unsure.", 4:"I have two choices for the first bit and two pairs.\nFinal answer: 4"}[index]
+        elif role == "behavior_prediction":
+            visible = json.loads(messages[-1]["content"])
+            predictions[index] = visible
+            assert [m["role"] for m in messages] == ["system", "user"]
+            assert set(visible) == {"original_question", "ordered_published_disclosures", "confirmed_student_work", "current_local_task"}
+            assert visible["original_question"] == source["question"] and "PRIVATE" not in messages[-1]["content"]
+            assert [item["ordinal"] for item in visible["ordered_published_disclosures"]] == list(range(1,index))
+            assert hints[index-2] in visible["ordered_published_disclosures"][-1]["text"]
+            if index == 2:
+                assert visible["confirmed_student_work"] == []
+                reply = dict(action="report_obstacle", outcome="obstacle_submitted", reason="PRIVATE_FORECAST",
+                             direction="check_submission_fields", source="local_task")
+            else:
+                assert json.loads(visible["confirmed_student_work"][0]["text"])["current_bit"] == 0
+                reply = dict(action="report_local", outcome="local_values_verified", reason="PRIVATE_FORECAST",
+                             direction="continue_checked_work", source="nonexistent")
+        elif role == "disclosure_draft":
+            if index == 2:
+                observation = json.loads(messages[-1]["content"])["current_difficulty"]["behavior_prediction_feedback"]
+                assert observation["forecast"]["action"] == "report_obstacle"
+                assert observation["predictor_interpretation"] == {"author":"behavior_predictor",
+                        "status":"unverified_interpretation", "text":"PRIVATE_FORECAST"}
+                assert observation["agreement_scope"] == "observable_action_and_outcome_categories_only"
+                assert observation["observed_student_submission"] == dict(action="report_local", outcome="local_values_verified",
+                        action_agreement="mismatched", outcome_agreement="mismatched")
+                assert observation["student_guidance"] == student_requests[2][-1]
+            step = steps[index-1]
+            reply = dict(decision="apply:"+step["id"], question_quote=step["quote"], bridge=step["quote"]+".",
+                         hint=hints[index-1], reason="PRIVATE_TUTOR_NOTE")
+        elif role == "disclosure":
+            citations=[dict(evidence_id="question", quote=steps[index-1]["quote"])]
+            if index == 2:
+                citations.append(dict(evidence_id="disclosed.1", quote=hints[0]))
+            reply=dict(decision="release", citations=citations, reason="PRIVATE_TUTOR_NOTE",
+                       pairing=dict(evidence_support=True, student_fit=True, history_fit="first" if index==1 else "continuous"))
+        elif role == "coach":
+            assert index == 4
+            reply=dict(decision="supported", diagnosis="The choices were counted.", reusable=[], independent_approaches=[])
+        else:
+            assert (role,index) == ("final_answer",4)
+            reply="4"
+        model = "student" if role in {"student","final_answer"} else "observer" if role=="behavior_prediction" else "tutor"
+        return {"model":model,"finish_reason":"stop","content":reply if isinstance(reply,str) else json.dumps(reply),
+                **({"reasoning_content":"PRIVATE_FORECAST_TRACE"} if role=="behavior_prediction" else {})}
+
+    case = GenerateGuidedAnswer(request).run(source, {"version":"test"}, 3, protocol_version="4.10.7",
+        until_correct=True, trusted_solution_receipts={receipt}, expected_first_model="student")
+    assert case["status"] == "accepted" and list(predictions) == [2,3]
+    assert all(calls[calls.index(("student", i))-1] == ("behavior_prediction", i) for i in predictions)
+    for n in (2,3):
+        record = case["attempts"][n-1]["behavior_prediction"]
+        assert record["visible"] == predictions[n] and record["response"]["reasoning_content"] == "PRIVATE_FORECAST_TRACE"
+        assert record["checkpoint"] == {"role":"behavior_prediction","attempt":n}
+    record = case["attempts"][2]["behavior_prediction"]
+    assert record["student_guidance"] is None and record["observation"]["outcome_agreement"] == "unknown"
+    before, disclosures = case["attempts"][0], case["disclosures"][:1]
+    assert not prediction_due("4.10.6", before, disclosures)
+    assert not prediction_due("4.10.7", before, disclosures, received_full=True)
+    assert not prediction_due("4.10.7", before, disclosures, solver_role="strong_continuation")
+    training = guided_training_target({**case, "binding":"case", "source_sha256":"source"}, "cases/test", {receipt})
+    prompt = training["messages"][-2]["content"]
+    assert "predictor_guidance_for_next_attempt" in prompt and "PRIVATE_FORECAST" not in prompt
+    assert training["guided_training_target"]["behavior_guidance_receipts"] == [
+        {"predictor":"002-behavior_prediction.json", "student":"002-student.json"}]

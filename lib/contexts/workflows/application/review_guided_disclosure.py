@@ -11,6 +11,7 @@ from lib.prompts.workflow_guided_answers import (
     PRIVATE_WORKED_REVIEW, PUBLIC_WORKED_WORDING, WORKED_DISCLOSURE_AUTHOR, WORKED_DISCLOSURE_REVIEW,
 )
 from ..domain.guided_answers import prior_clue_evidence, read_teacher_submission
+from ..domain.guided_behavior_prediction import prediction_feedback
 from ..domain.guided_disclosure_text import (
     checked_reviewer_pairing, locate_authored_task_citations, locate_teacher_premise, render_teacher_text,
 )
@@ -100,6 +101,8 @@ def _review_material(source, attempt, retained, findings, disclosed, candidate):
         # An ambiguous conclusion identifies a difficulty. It never establishes a premise.
         material["current_difficulty"]["latest_marked_student_candidate"] = candidate_observation
         material["current_difficulty"]["student_response_tail"] = attempt["student"]["content"][-600:]
+    if prediction := attempt.get("behavior_prediction"):
+        material["current_difficulty"]["behavior_prediction_feedback"] = prediction_feedback(prediction)
     return material, evidence, previous_id
 
 

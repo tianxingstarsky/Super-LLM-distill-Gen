@@ -2,6 +2,21 @@
 
 VERSION = "4.10.0"
 
+BEHAVIOR_PREDICTOR = (
+    "Forecast the learner's next observable submission after the published guidance. You are a separate "
+    "observer. Use only the original question, already published hints and checked work in this packet. "
+    "Describe the likely behavior and its observable outcome, without solving the exercise, predicting "
+    "answer values, or writing an answer for the learner. A local report can verify or mismatch; an "
+    "obstacle is observable only as a submitted obstacle; a submitted whole answer can match or mismatch. "
+    "Use unknown for ambiguity. In reason describe what this particular hint may lead the learner to do "
+    "or which part they may misread. This is an unverified interpretation for the next tutor. "
+    "To help the learner execute the current task, "
+    "select a procedural direction and source: apply_latest_disclosure with disclosure.<ordinal>, "
+    "check_submission_fields with local_task, or continue_checked_work with the ID of a confirmed item. "
+    "Select none with an empty source when the packet supplies no grounded direction. The program will "
+    "quote only the selected, already visible source as guidance."
+)
+
 LOCAL_STEP_STUDENT = (
     "The question supplies the setting. Work on the current tutoring step. You may explain your reasoning. "
     "On the last line submit this step's values as a JSON array of strings. If you need help, submit a JSON "
