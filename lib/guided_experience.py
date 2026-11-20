@@ -5,6 +5,7 @@ from pathlib import Path
 
 from lib.bootstrap.google_reasoning_bank import google_reasoning_bank_application
 from lib.bootstrap.experience_evolution import experience_evolution_application
+from lib.bootstrap.guided_teacher_feedback import reviewed_disclosure_for_learning
 from lib.bootstrap.backends import backend_application
 from lib.bootstrap.reasoning_bank import reasoning_bank_application
 from lib.contexts.workflows.api import adopt_final_teacher_edition, learn_guided_experience, recorded_final_proposal
@@ -21,6 +22,8 @@ def main():
     parser.add_argument("--assessment", type=Path, help="Completed human assessment or independent verification specification")
     parser.add_argument("--adopt-final-edition", help="Freeze an existing teacher final-answer edition for use in a new run, without calling a model")
     parser.add_argument("--revision", type=int, default=0, help="Teacher draft index, starting at zero")
+    parser.add_argument("--source-run", type=Path, action="append", default=[],
+                        help="Original guided run authenticating a replayed disclosure-teacher checkpoint (repeat for ancestors)")
     parser.add_argument("--query", help="Skill needed in the next batch (student and disclosure roles)")
     parser.add_argument("--backend", help="Registered model service for induction")
     parser.add_argument("--model")
@@ -62,6 +65,8 @@ def main():
         parser.error("--library, --backend and --model are required to learn a candidate")
     if args.role != "final_answer_teacher" and not args.query:
         parser.error("--query is required for student or disclosure-teacher experience")
+    reviewed_text = (reviewed_disclosure_for_learning(args.case, case, args.attempt, args.revision, args.source_run)
+                     if args.role == "disclosure_teacher" else None)
     binding = {"backend": args.backend, "model": args.model, "max_output_tokens": args.max_tokens,
                "context_window_tokens": args.context_tokens}
     if args.role == "final_answer_teacher":
@@ -73,7 +78,7 @@ def main():
         bank.bank = reasoning_bank_application(root=args.library, embedding_cache=args.embedding_cache)
     result = learn_guided_experience(bank, case, args.attempt, args.query, args.parent,
                                      role=args.role, revision=args.revision, teacher_receipt=receipt,
-                                     assessment=assessment)
+                                     assessment=assessment, reviewed_public_text=reviewed_text)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     atomic_json(args.output, result)
     print(json.dumps({"version": result["version"], "status": result["receipt"]["learning_status"]}))

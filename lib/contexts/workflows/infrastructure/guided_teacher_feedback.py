@@ -9,11 +9,14 @@ from filelock import FileLock
 from ..application.guided_experience import observed_teacher_disclosure
 from ..application.guided_teacher_feedback import MIXED_INTERMEDIATE, OBSERVED_REWARDS, observed_followup
 from ..domain.experience_evolution import digest
-from ..domain.guided_protocol_versions import ATTRIBUTED_TUTORING_VERSIONS, LOCAL_STEP_VERSIONS, TYPED_SUBMISSION_VERSIONS
+from ..domain.guided_protocol_versions import (
+    ATTRIBUTED_TUTORING_VERSIONS, LOCAL_STEP_VERSIONS, PUBLIC_OPERATION_RENDERING_VERSIONS, TYPED_SUBMISSION_VERSIONS, snapshot_version,
+)
 from ..domain.guided_answers import inspect_answer, read_teacher_submission
 from ..domain.guided_local_steps import check_local_step, dispatched_local_guidance, local_step_material, local_step_target
 from ..domain.guided_student_calculations import attributable_mixed_calculations, recovered_student_calculations
 from ..domain.guided_training_targets import GUIDED_TARGET_FILE
+from . import guided_answer_records
 from .guided_answer_records import (
     disclosure_delivery, guided_port_response, inputs, location, read, replay_first, replay_matching_call, verified_step_registry,
 )
@@ -50,6 +53,41 @@ def archive_receipt(folder, binding, ident, role, index, expected=None, protocol
 def fingerprint(receipt):
     # Different child manifests can replay exactly the same original operation.
     return digest({"role": receipt["role"], "request": receipt["request"], "response": receipt["response"]})
+
+
+def reviewed_disclosure_for_learning(case_path, case, number, revision, source_runs):
+    """Resolve one direct-learning revision against the frozen run and its original checkpoints."""
+    path = case_path.resolve()
+    folder = path.parent
+    run = folder.parent.parent
+    archived_manifest = run / "manifest.json"
+    manifest = read(archived_manifest) if folder.parent.name == "cases" and archived_manifest.is_file() else {}
+    version = snapshot_version(case)
+    if version not in PUBLIC_OPERATION_RENDERING_VERSIONS and manifest.get("template_version") not in PUBLIC_OPERATION_RENDERING_VERSIONS:
+        return None
+    if (manifest.get("template_version") != version or case.get("binding") != digest(manifest)
+            or path != location(run, case["id"]) / "case.json"):
+        raise ValueError("direct learning requires the original case and its bound guided-run manifest")
+    if not 1 <= number <= len(case["attempts"]):
+        raise ValueError("select a recorded student round")
+    attempt = case["attempts"][number - 1]
+    history = attempt.get("disclosure_work", [])
+    if attempt["attempt"] != number or not 0 <= revision < len(history) or history[revision]["revision"] != revision:
+        raise ValueError("select a recorded teacher disclosure revision")
+    work = history[revision]
+    _, trusted = verified_step_registry(run, None, manifest)
+    rendered = guided_answer_records.verify_teacher_rendering(case, attempt, work, folder, trusted)
+    if rendered is not None:
+        parents = {digest(read(src / "manifest.json")): src for src in source_runs}
+        author = "disclosure_rewrite" if revision else "disclosure_draft"
+        checkpoint = work["review_checkpoint"]
+        for role, index, expected in ((author, number, work["draft_response"]),
+                                      (checkpoint["role"], checkpoint["index"], work["review_response"])):
+            receipt = read(folder / f"{index:03}-{role}.json")
+            archived = replay_matching_call(run, case["id"], role, index, receipt["request"], case["binding"], original_runs=parents)
+            if not archived or archived[0] != expected:
+                raise ValueError("teacher learning checkpoint differs from the original model response")
+    return rendered
 
 
 def teaching_events(case, folder, protocol, parents, experience, *, source, trusted, learner_model, endpoints=None):

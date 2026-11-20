@@ -6,7 +6,9 @@ from lib.bootstrap.backends import backend_application
 from lib.bootstrap.google_reasoning_bank import google_reasoning_bank_application
 from lib.bootstrap.guided_answers import _native_slot_pool
 from lib.contexts.models.infrastructure.request_runtime import ChatClient
-from lib.contexts.workflows.infrastructure.guided_teacher_feedback import TeacherFeedbackStore, verify_applied
+from lib.contexts.workflows.infrastructure.guided_teacher_feedback import (
+    TeacherFeedbackStore, reviewed_disclosure_for_learning, verify_applied,
+)
 
 
 def teacher_feedback_store(root):
