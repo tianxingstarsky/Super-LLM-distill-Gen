@@ -134,6 +134,26 @@ def disclosure_draft_decision_schema(*, grounded, step_ids=(), premise_choices=(
     return {"anyOf": branches}
 
 
+def worked_disclosure_schema(operations, *, require_operation=False, premise_choices=()):
+    """Applying a catalogue operation requires an actual public explanation."""
+    schema = disclosure_draft_decision_schema(grounded=True, premise_choices=premise_choices)
+    offer = schema["anyOf"][0]["properties"]["decision"]
+    choices = [f"apply:{step_id}" for step_id in operations]
+    if not require_operation:
+        choices.append("offer")
+    if choices:
+        offer.clear()
+        offer["enum"] = choices
+    else:
+        schema["anyOf"].pop(0)
+    return schema
+
+
+WORKED_DISCLOSURE_AUTHOR = """You are tutoring the learner on this particular problem. Write the next piece of the solution so it can be read immediately after your last published explanation. Carry forward an established result, or start from a precise premise if no result has been established. Name the actual entities, positions, values or relations that matter here. Work out the local consequence and explain why it follows. Make clear what that consequence now lets the learner decide, and leave that decision open. A catalogue operation is an idea to apply to the problem, not text to recite. When applying one, return apply:<id>. Use offer for a different grounded advance when available. The bridge and hint are both read by the learner in order, in the learner's language. Connect them by meaning, without procedural headings or a prescribed length. Use the original task's exact wording in question_quote. Attribute the learner's own findings only when the record supports them. If the learner supplied a wrong guess, you can test it against a real condition without inventing their reasoning. Keep the final answer private. Return insufficient only when you cannot justify a further advance."""
+
+WORKED_DISCLOSURE_REVIEW = """You independently review the tutor's proposed public explanation. Read the bridge and hint together with the original question, established student findings and the last published disclosure. Can the learner tell which part of the problem is being worked out? Check the local inference against the evidence, including quantities, subjects and conditions. Does it actually establish something the next turn can use? A well-supported intermediate result is a legitimate disclosure. Withhold unsupported claims, a leap to the final answer, repetition, or a generic instruction with no worked application. A failed student attempt does not itself invalidate the next explanation. For release, copy the tutor's bridge exactly, cite a specific exact premise from the question, and cite the latest published disclosure when one exists. Keep the review rationale private. For withhold, identify the concrete defect."""
+
+
 GROUNDED_AUTHOR_GUIDANCE = """When the learner submits only a candidate answer, you know what was submitted, not how it was obtained. A missing derivation does not prevent you from teaching from the problem. Look for one relation, condition or operation in the original task that the learner can test next. In question_quote copy the exact clause or data expression supporting your suggestion. In bridge connect that evidence to what can actually be checked; in hint leave the check or local calculation for the learner. If one choice violates an explicit condition, start with that comparison rather than asking for an entire solution. If the source of an error is unknown, leave it unknown. A wrong guess is not an established intermediate result. Praise only a finding identified as established and consistent with your evidence. Offer a small, useful next action whenever these materials support one. Insufficient means no defensible next action can be found; in that case leave question_quote, bridge and hint empty. When revising, change the actual public suggestion in response to the defect."""
 
 GROUNDED_HINT_REVIEW = """A learner who has not shown work can still test a condition from the problem. Judge whether the proposed public words give one feasible next action. Check the writer's question_quote for the particular relation or value needed. Merely repeating the candidate, restating the goal, quoting a topic word or praising an unverified guess does not establish a useful step. Reject a fabricated account of how the learner got a result, a false assertion or the disclosure of the solution. Do not withhold a grounded weak hint solely because the learner has not yet applied it. Distinguish multiple necessary facts from a single fact when the question permits a set."""

@@ -111,6 +111,7 @@ class GenerateGuidedAnswer:
         if paired:
             assess_hint = partial(review_or_recommend_disclosure, teacher_experience=teacher_experience,
                                   tried=tried_verified_steps, task_analysis=task_analysis,
+                                  contextual_operations=protocol_version == "4.10.1",
                                   quoted_premises=protocol_version == "4.7.1" or evidenced_progress,
                                   check_arithmetic=check_arithmetic,
                                   bare_answer_operations=check_arithmetic and bare_answer_operations)
