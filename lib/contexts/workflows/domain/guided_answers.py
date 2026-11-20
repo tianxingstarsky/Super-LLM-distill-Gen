@@ -223,6 +223,13 @@ def _answer_declarations(lines, marked_finals):
         offset += len(line)
 
 
+def repeated_final_declaration_spans(text):
+    """Locate duplicate public declarations in the original draft without interpreting their values."""
+    lines = text.splitlines(keepends=True)
+    spans = [[start, start + len(lines[i].rstrip("\r\n"))] for i, start, _ in _answer_declarations(lines, True)]
+    return spans if len(spans) > 1 else []
+
+
 def latest_marked_draft_candidate(text):
     """Locate the solver's latest labelled, unconfirmed statement in its original output."""
     lines = text.splitlines(keepends=True)

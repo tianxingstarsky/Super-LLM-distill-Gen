@@ -12,8 +12,20 @@ from lib.contexts.workflows.infrastructure.guided_answer_records import run_guid
 from lib.contexts.workflows.infrastructure.guided_llama import DIRECT_ANSWER_GRAMMARS, GuidedChatEndpoint
 
 
-@pytest.mark.parametrize("version,certified", [("4.10.0", True), ("4.10.1", False), ("4.10.1", True)])
-def test_withheld_first_hint_can_use_signed_rule_steps_before_handoff(tmp_path, monkeypatch, version, certified):
+@pytest.mark.parametrize("version,certified,weak_reply,strong_result", [
+    ("4.10.0", True, "wrong", None),
+    ("4.10.1", False, "wrong", None),
+    ("4.10.1", True, "wrong", "accepted"),
+    ("4.10.1", True, "duplicate", None),
+    ("4.10.2", False, "duplicate", None),
+    ("4.10.2", True, "unclear", None),
+    ("4.10.2", True, "progress", None),
+    ("4.10.2", True, "duplicate", "accepted"),
+    ("4.10.2", True, "duplicate", "unreviewed_derivation"),
+    ("4.10.2", True, "duplicate", "failed_delivery"),
+])
+def test_withheld_first_hint_can_use_signed_rule_steps_before_handoff(
+        tmp_path, monkeypatch, version, certified, weak_reply, strong_result):
     question = ("Ann is kind. All kind things are blue. All blue things are round.\n\n"
                 "Claim: Ann is round.\nShow why, then give the verdict as True, False or Unknown.")
     proof = ("With “Ann is kind”, the rule “All kind things are blue” gives “Ann is blue”.\n"
@@ -24,17 +36,31 @@ def test_withheld_first_hint_can_use_signed_rule_steps_before_handoff(tmp_path, 
     calls = []
     wrong = "I cannot establish the claim.\nFinal answer: False"
     solved = "Kindness puts Ann among the blue things, all of which are round.\nFinal answer: True"
+    final_declarations = ["**Final Answer**: True.", "Final Answer: True.", "Final answer: True"]
+    failed_text = "The weak solver introduced an ungrounded attribute.\n</think>"
+    full_reply = {"wrong": wrong, "duplicate": "\n".join([failed_text, *final_declarations]),
+                  "progress": "\n".join(["I'll apply the rule for kind things to Ann.", *final_declarations]),
+                  "unclear": "I will check again.\n```\nFinal answer: True\nFinal answer: False\n```"}[weak_reply]
 
     def request(role, index, messages, schema):
         calls.append((role, index, messages))
         if role == "student":
-            response = wrong
+            response = full_reply if index == 4 else wrong
+            if index == 5:
+                assert weak_reply == "progress"
+                response = solved
         elif role == "disclosure_draft":
             assert index == 1
             response = dict(decision="insufficient", question_quote="", bridge="", hint="", reason="No new grounded hint.")
         elif role == "coach":
-            response = dict(decision="supported" if index == 5 else f"revise:a{index}.s1",
+            supported = ((index == 4 and weak_reply in {"duplicate", "unclear"})
+                         or (index == 5 and strong_result != "unreviewed_derivation"))
+            response = dict(decision="supported" if supported else f"revise:a{index}.s1",
                             diagnosis="Check the two implications.", reusable=[], independent_approaches=[])
+            if index == 4 and weak_reply == "progress":
+                response.update(decision="revise:a4.s2", independent_approaches=[{
+                    "segment_id":"a4.s1", "question_quote":"All kind things are blue",
+                    "justification":"The rule applies to the given premise about Ann."}])
             if "anchored_contradiction" in schema["properties"]:
                 response["anchored_contradiction"] = []
         else:
@@ -46,7 +72,7 @@ def test_withheld_first_hint_can_use_signed_rule_steps_before_handoff(tmp_path, 
 
     script = [("student",1),("coach",1),("disclosure_draft",1),
               ("student",2),("coach",2),("student",3),("coach",3),("student",4),("coach",4),
-              ("strong_continuation",5),("coach",5)]
+              ("student" if weak_reply == "progress" else "strong_continuation",5),("coach",5)]
 
     def serve(ep, url, body=None):
         if url.endswith("/slots"):
@@ -58,8 +84,14 @@ def test_withheld_first_hint_can_use_signed_rule_steps_before_handoff(tmp_path, 
         if url.endswith("/tokenize"):
             return {"tokens":list(body["content"].encode())}
         if url.endswith("/completion"):
-            assert ep.model=="strong"
-            return {"content":solved, "stop_type":"eos", "tokens_evaluated":len(body["prompt"]), "tokens_predicted":12}
+            assert ep.model == ("weak" if weak_reply == "progress" else "strong")
+            assert weak_reply == "progress" or strong_result in {"accepted", "failed_delivery"}
+            if version == "4.10.2" and weak_reply == "duplicate":
+                native_prompt = bytes(body["prompt"]).decode("utf8")
+                assert failed_text not in native_prompt and proof.splitlines()[0] in native_prompt
+                assert native_prompt.endswith("<think>\n" + solved.splitlines()[0] + "\n</think>\n\n")
+            return {"content":wrong if strong_result == "failed_delivery" else solved,
+                    "stop_type":"eos", "tokens_evaluated":len(body["prompt"]), "tokens_predicted":12}
         assert url.endswith("/v1/chat/completions")
         role,index=script[len(calls)]
         reply=request(role,index,body["messages"],body.get("response_format",{}).get("json_schema",{}).get("schema",{}))
@@ -77,20 +109,53 @@ def test_withheld_first_hint_can_use_signed_rule_steps_before_handoff(tmp_path, 
     if not certified or version == "4.10.0":
         assert result["verification"]["issue"] == "teacher_needs_more_evidence" and not result["disclosures"]
         return
+    inputs={(r,n):ms for r,n,ms in calls}
+    weak_attempt = result["attempts"][3]
+    if weak_reply != "wrong":
+        assert weak_attempt["check"] == {"format_ok":False, "answer":None, "answer_matches":None,
+                                         "issue":"missing_or_ambiguous_final_line"}
+    if strong_result is None:
+        assert ("strong_continuation",5) not in inputs and "handoff_evidence" not in weak_attempt
+        if weak_reply == "progress":
+            assert weak_attempt["verified_stage"]["student_advanced"]
+            assert result["status"] == "accepted" and result["continuation_provenance"]["solver_role"] == "student"
+            return
+        assert result["verification"]["issue"] == "complete_disclosure_needs_further_evidence"
+        return
+    assert inputs["strong_continuation",5] == inputs["student",4]
+    if weak_reply == "duplicate":
+        evidence = weak_attempt["handoff_evidence"]
+        assert evidence["student_receipt"] == "004-student.json" and evidence["reason"] == "repeated_final_declarations"
+        assert [full_reply[a:b] for a,b in evidence["declaration_spans"]] == final_declarations
+        assert weak_attempt["coach"]["verdict"] == "supported"
+    if strong_result != "accepted":
+        assert result["status"] == "awaiting_guidance" and len(result["attempts"]) == 5
+        assert not (output/"training-targets.jsonl").read_bytes()
+        assert ("formal_answer" in result["attempts"][-1]) is (strong_result == "failed_delivery")
+        return
     assert result["status"] == "accepted", result["verification"]
     steps=result["disclosures"]
     assert [s["reference_receipt"] for s in steps]==[receipt,receipt]
     assert [s["depends_on"] for s in steps]==[[],[steps[0]["id"]]]
     assert steps[0]["text"]==proof.splitlines()[0] and "Ann is round" not in steps[1]["text"]
-    inputs={(r,n):ms for r,n,ms in calls}
     assert steps[0]["text"] in inputs["student",2][-1]["content"]
     assert all(s["text"] in inputs["student",3][-1]["content"] for s in steps)
-    assert inputs["strong_continuation",5] == inputs["student",4]
     assert json.loads(inputs["student",4][-1]["content"].split("\n",1)[1])["complete_disclosure"]["worked_solution"] == proof
     target=json.loads((output/"training-targets.jsonl").read_bytes())
     assert not json.loads((output/"teacher_feedback.jsonl").read_bytes())["published"]
     assert target["messages"][-1]["reasoning_content"] == solved.splitlines()[0]
-    assert target["guided_training_target"]["objective"]=="guided_correction"
+    if version == "4.10.2":
+        assert target["guided_training_target"]["objective"] == "full_disclosure_strong_continuation"
+        assert target["guided_training_target"]["reasoning_spans"][0]["receipt"] == "005-strong_continuation.json"
+        public_view = json.loads(target["messages"][-2]["content"].split("\n\n")[-1].split("\n", 1)[1])
+        assert public_view["complete_disclosure"] == {"worked_solution": proof, "answer": "True"}
+        assert public_view["previously_disclosed_clues"] + [public_view["new_clue"]] == [s["text"] for s in steps]
+        assert failed_text.splitlines()[0] not in target["messages"][-2]["content"]
+        assert failed_text in weak_attempt["student"]["content"]
+        assert result["messages"][-2] == inputs["strong_continuation",5][-1]
+        assert to_trl_sft(target)["messages"][-1]["content"] == solved
+    else:
+        assert target["guided_training_target"]["objective"] == "guided_correction"
     assert target["guided_training_target"]["reference_answer_disclosed"] is True
 
 

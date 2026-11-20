@@ -37,6 +37,7 @@ from ..domain.guided_answers import (
     latest_marked_draft_candidate,
     prior_clue_evidence,
     read_teacher_submission,
+    repeated_final_declaration_spans,
     rooted_prefix_count,
     shared_findings,
     student_reasoning_trace,
@@ -85,6 +86,8 @@ class GenerateGuidedAnswer:
         language = str(source.get("source", {}).get("language") or "").lower()
         chinese = language.startswith("zh") if language else any("\u4e00" <= ch <= "\u9fff" for ch in question)
         evidenced_progress = protocol_version in EVIDENCED_PROGRESS_VERSIONS
+        contextual_operations = protocol_version in {"4.10.1", "4.10.2"}
+        delivery_handoff = protocol_version == "4.10.2"
         if (trusted_solution_receipts or continuation_model is not None) and not evidenced_progress:
             raise ValueError("complete-disclosure teaching requires guided protocol 4.8")
         skip_acquired = protocol_version != "3.0.0"
@@ -111,7 +114,7 @@ class GenerateGuidedAnswer:
         if paired:
             assess_hint = partial(review_or_recommend_disclosure, teacher_experience=teacher_experience,
                                   tried=tried_verified_steps, task_analysis=task_analysis,
-                                  contextual_operations=protocol_version == "4.10.1",
+                                  contextual_operations=contextual_operations,
                                   quoted_premises=protocol_version == "4.7.1" or evidenced_progress,
                                   check_arithmetic=check_arithmetic,
                                   bare_answer_operations=check_arithmetic and bare_answer_operations)
@@ -130,7 +133,7 @@ class GenerateGuidedAnswer:
                     "4.5.0": "v4.5", "4.5.1": "v4.5.1", "4.6.0": "v4.6", "4.7.0": "v4.7",
                     "4.7.1": "v4.7.1", "4.8.0": "v4.8", "4.8.1": "v4.8.1",
                     "4.8.2": "v4.8.2", "4.8.3": "v4.8.3", "4.9.0": "v4.9", "4.9.1": "v4.9.1",
-                    "4.10.0": "v4.10.0", "4.10.1": "v4.10.1"}[protocol_version]
+                    "4.10.0": "v4.10.0", "4.10.1": "v4.10.1", "4.10.2": "v4.10.2"}[protocol_version]
         tutor_instruction = SINGLE_DECISION_REVIEW if single_decision else ANCHORED_REVIEW if anchored else COACH
         if grounded:
             tutor_instruction += "\n\n" + GROUNDED_STUDENT_REVIEW
@@ -148,6 +151,7 @@ class GenerateGuidedAnswer:
         task_system = source.get("task_system") if record_guided_reasoning else None
         task_messages = [{"role": "system", "content": task_system}] if task_system else []
         task_messages.append({"role": "user", "content": question})
+        record_task = task_messages
         delivery_form = requested_delivery(source) if solver_delivery else source.get("answer_requirement")
         require_explanation = task_analysis and delivery_form == "worked_solution"
         final_task = task_messages
@@ -198,7 +202,7 @@ class GenerateGuidedAnswer:
             raise ValueError("calculation teaching requires its independent plan receipt")
         needs_worked_calculation = bool(plan and require_explanation)
         full_reference = certified_complete_disclosure(source, trusted_solution_receipts) if evidenced_progress else None
-        proof_steps = certified_rule_prefixes(question, full_reference) if protocol_version == "4.10.1" and until_correct else []
+        proof_steps = certified_rule_prefixes(question, full_reference) if contextual_operations and until_correct else []
         proof_position = None
         send_full = False
         next_solver = "student"
@@ -291,8 +295,9 @@ class GenerateGuidedAnswer:
             if evidenced_progress:
                 attempt["verified_stage"] = {"assessed": False, "comparable": False, "state": "not_assessed",
                                              "hints_received": len(disclosed), "student_advanced": None}
-            if plan and index == 1 and (not student.get("model")
-                                        or expected_first_model is not None and student["model"] != expected_first_model):
+            verify_student = (plan and index == 1) or (delivery_handoff and send_full and next_solver == "student")
+            if verify_student and (not student.get("model")
+                                   or expected_first_model is not None and student["model"] != expected_first_model):
                 status, issue = "awaiting_guidance", "solver_identity_unverified"
                 attempt["check"] = dict(format_ok=False, answer=None, answer_matches=None, issue=issue)
                 break
@@ -696,8 +701,15 @@ class GenerateGuidedAnswer:
                 and (not send_full or bool(new_segments))
             ):
                 if record_guided_reasoning and gold is not None:
-                    trace = student_reasoning_trace(attempts, question, verified_truncated_only=True)
-                    if contains_chat_control(trace):
+                    strong_handoff = delivery_handoff and next_solver == "strong_continuation"
+                    # The readout sees the public evidence in its original role. Only this
+                    # solver's reviewed work is placed inside its assistant reasoning prefix.
+                    readout_task = [*final_task, messages[-1]] if strong_handoff else final_task
+                    if strong_handoff:
+                        record_task = [*task_messages, messages[-1]]
+                    trace = (assemble(new_segments).rstrip() if strong_handoff else
+                             student_reasoning_trace(attempts, question, verified_truncated_only=True))
+                    if contains_chat_control(trace) or (strong_handoff and contains_chat_control(messages[-1]["content"])):
                         issue = "guided_reasoning_contains_control_markers"
                         break
                     if teacher_delivery:
@@ -733,7 +745,7 @@ class GenerateGuidedAnswer:
                     prefix = {"role": "assistant", "reasoning_content": trace, "content": ""}
                     role = "strong_final_answer" if solver_delivery and next_solver == "strong_continuation" else "final_answer"
                     receipt = f"{index:03}-{role}.json"
-                    formal = self.request(role, index, [*final_task, prefix], None)
+                    formal = self.request(role, index, [*readout_task, prefix], None)
                     if solver_delivery:
                         formal_check = inspect_solver_delivery(formal, source, {s["id"]: s["text"] for s in active}, delivery_form)
                         if check_arithmetic and formal_check["format_ok"]:
@@ -767,6 +779,9 @@ class GenerateGuidedAnswer:
                     if not (formal_check["format_ok"] and formal_check["answer_matches"] is True):
                         issue = formal_check["issue"]
                         version["first_unresolved"] = "formal_answer"
+                        if delivery_handoff and next_solver == "strong_continuation":
+                            status = "awaiting_guidance"
+                            break
                         if solver_delivery and (issue in {"formal_answer_model_unverified", "formal_answer_explanation_needs_review",
                                                          "formal_answer_quantity_conversion_unverified"}
                                 or formal["finish_reason"] != "stop" or not final_text.strip()
@@ -808,7 +823,8 @@ class GenerateGuidedAnswer:
                     training_reasoning = trace
                     if solver_delivery and any(a.get("truncated_observation", {}).get("repetition") for a in attempts):
                         status, issue = "unverified", "repetitive_truncated_trajectory_requires_review"
-                        training_reasoning = student_reasoning_trace(attempts, question)
+                        if not strong_handoff:
+                            training_reasoning = student_reasoning_trace(attempts, question)
                         version["first_unresolved"] = None
                         break
                 status = "accepted" if gold is not None else "unverified"
@@ -821,10 +837,18 @@ class GenerateGuidedAnswer:
                 if next_solver == "strong_continuation":
                     status, issue = "awaiting_guidance", "strong_continuation_unresolved"
                     break
-                if (stage["comparable"] and (stage["answer_key_match"] is False or attempt.get("reviewed_derivation_conflict"))
-                        and not stage["student_advanced"]
+                refuted = stage["comparable"] and (
+                    stage["answer_key_match"] is False or attempt.get("reviewed_derivation_conflict"))
+                declaration_spans = []
+                if delivery_handoff and check["issue"] == "missing_or_ambiguous_final_line":
+                    declaration_spans = repeated_final_declaration_spans(suffix)
+                if ((refuted or declaration_spans) and not stage["student_advanced"]
                         and student["finish_reason"] == "stop" and continuation_model):
                     next_solver = "strong_continuation"
+                    if declaration_spans:
+                        attempt["handoff_evidence"] = {
+                            "reason": "repeated_final_declarations", "declaration_spans": declaration_spans,
+                            "student_receipt": delivery_log[-1]["receipt"]}
                 elif not stage["student_advanced"] or (not until_correct and len(delivery_log) >= max_attempts):
                     status, issue = "awaiting_guidance", "complete_disclosure_needs_further_evidence"
                     break
@@ -1001,7 +1025,7 @@ class GenerateGuidedAnswer:
             "shared_student_findings": list(findings.values()),
             **({"supported_student_approaches": list(approaches.values())} if task_analysis else {}),
             "messages": [
-                *task_messages,
+                *record_task,
                 {"role": "assistant", "content": final_text,
                  **({"reasoning_content": training_reasoning} if training_reasoning else {})},
             ],

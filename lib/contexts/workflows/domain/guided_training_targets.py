@@ -1,5 +1,6 @@
 """Project accepted solver evidence into a single Qwen assistant target per task."""
 
+import hashlib
 import json
 
 from .guided_answers import assemble, contains_chat_control, read_teacher_submission
@@ -9,7 +10,7 @@ from .guided_teaching_steps import certified_complete_disclosure, certified_rule
 
 GUIDED_TARGET_FILE = "training-targets.jsonl"
 GUIDED_TARGET_SCHEMA = "guided-training-target/v1"
-GUIDED_TARGET_VERSIONS = frozenset({"4.9.1", "4.10.0", "4.10.1"})
+GUIDED_TARGET_VERSIONS = frozenset({"4.9.1", "4.10.0", "4.10.1", "4.10.2"})
 
 
 class GuidedTargetHeld(ValueError):
@@ -64,6 +65,25 @@ def _correction_prompt(question, attempts, chinese):
                    if chinese else "Correct the solution to the original task using the recorded drafts "
                    "and guidance below. Earlier student work may contain errors.")
     return question + "\n\n" + instruction + "\n" + json.dumps(history, ensure_ascii=False, indent=2)
+
+
+def _strong_handoff_prompt(case, reference):
+    weak, strong = case["attempts"][-2:]
+    messages = strong["student_request_messages"]
+    if (weak.get("solving_role") != "student" or weak["student_request_messages"] != messages
+            or [m["role"] for m in messages] != ["system", "user", "tool"] or messages[1]["content"] != case["question"]):
+        raise ValueError("strong continuation differs from the disclosed student request")
+    prefix = "Continue the solution from this current view.\n"
+    if not messages[-1]["content"].startswith(prefix):
+        raise ValueError("strong continuation lacks the complete public view")
+    view = json.loads(messages[-1]["content"][len(prefix):])
+    if view.get("complete_disclosure") != reference:
+        raise ValueError("strong continuation did not receive the attested solution")
+    view["complete_disclosure"] = {key: reference[key] for key in ("worked_solution", "answer")}
+    chinese = str(case["source"].get("language") or "").lower().startswith("zh") or any(
+        "\u4e00" <= c <= "\u9fff" for c in case["question"])
+    label = "接手作答时收到的公开材料" if chinese else "Public guidance supplied to the continuation solver"
+    return case["question"] + "\n\n" + label + "\n" + json.dumps(view, ensure_ascii=False, indent=2)
 
 
 def _calculation_target(case, steps, provenance):
@@ -136,6 +156,7 @@ def guided_training_target(case, case_archive, trusted_solution_receipts, *, cal
         formal = last["formal_answer"]
         origin = case["final_answer_provenance"]
         role = last.get("solving_role", "student")
+        strong_handoff = case.get("protocol") == "guided-draft-snapshot/v4.10.2" and role == "strong_continuation"
         if (origin != formal["provenance"] or origin["author"] != role or not origin["model"]
                 or formal["response"].get("model") != origin["model"] or last["student"].get("model") != origin["model"]
                 or formal["response"]["content"] != answer or formal["check"]["format_ok"] is not True
@@ -152,17 +173,34 @@ def guided_training_target(case, case_archive, trusted_solution_receipts, *, cal
             reference = certified_complete_disclosure(case, trusted_solution_receipts)
         if staged:
             expected = certified_rule_prefixes(question, reference)
-            if (case.get("protocol") != "guided-draft-snapshot/v4.10.1" or len(staged) > len(expected)
+            if (case.get("protocol") not in {"guided-draft-snapshot/v4.10.1", "guided-draft-snapshot/v4.10.2"}
+                    or len(staged) > len(expected)
                     or any(any(actual.get(k) != v for k, v in planned.items())
                            for actual, planned in zip(staged, expected))):
                 raise ValueError("published proof prefix differs from its attested order and source")
             provenance.update(reference_receipt=reference["id"], published_proof_spans=[s["source_span"] for s in staged])
-        if full or continuation:
+        if full or continuation or strong_handoff:
             if (not reference or full != [reference] or not continuation
                     or continuation.get("reference_answer_disclosed") is not True
                     or continuation["complete_disclosure_id"] != reference["id"]):
                 raise ValueError("teacher demonstration requires the bound verified reference")
-            if staged:
+            if strong_handoff:
+                question = _strong_handoff_prompt(case, reference)
+                current = [s for s in case["retained_segments"] if s["attempt"] == last["attempt"]]
+                derivation = assemble(current).rstrip()
+                if not derivation:
+                    raise GuidedTargetHeld("missing_reviewed_derivation")
+                solver_receipt = f"{last['attempt']:03}-strong_continuation.json"
+                if (origin["solver_receipt"] != solver_receipt or case["messages"][-2] != last["student_request_messages"][-1]
+                        or case["messages"][-1].get("reasoning_content") != derivation
+                        or origin["solving_history_sha256"] != hashlib.sha256(derivation.encode("utf-8")).hexdigest()):
+                    raise ValueError("strong readout differs from the reviewed continuation and its public context")
+                objective = "full_disclosure_strong_continuation"
+                target["reasoning_content"] = derivation
+                provenance.update(reasoning_origin="reviewed_continuation_spans", reference_receipt=reference["id"],
+                                  reasoning_spans=[s for s in spans if s["receipt"] == solver_receipt],
+                                  solver_input_receipt=solver_receipt)
+            if staged or strong_handoff:
                 if " ".join(derivation.split()) == " ".join(reference["worked_solution"].split()):
                     raise GuidedTargetHeld("solver_only_repeated_the_disclosed_proof")
                 provenance["reference_answer_disclosed"] = True
@@ -171,7 +209,7 @@ def guided_training_target(case, case_archive, trusted_solution_receipts, *, cal
                 target["reasoning_content"] = reference["worked_solution"]
                 provenance.update(reasoning_origin="verified_source_solution", reference_receipt=reference["id"],
                                   reference_author=case["source"].get("reasoning_author"))
-        if staged or not (full or continuation):
+        if not strong_handoff and (staged or not (full or continuation)):
             objective = "independent_solution" if independent else "guided_correction"
             target["reasoning_content"] = derivation
             provenance.update(reasoning_origin="reviewed_student_spans", reasoning_spans=spans)
@@ -185,7 +223,7 @@ def guided_training_target(case, case_archive, trusted_solution_receipts, *, cal
     if any(contains_chat_control(text) for text in (question, target.get("reasoning_content", ""), answer)):
         raise GuidedTargetHeld("chat_delimiter_in_training_text")
     messages = [{"role": "system", "content": case["task_system"]}] if case.get("task_system") else []
-    if case.get("protocol") in {"guided-draft-snapshot/v4.10.0", "guided-draft-snapshot/v4.10.1"}:
+    if case.get("protocol") in {"guided-draft-snapshot/v4.10.0", "guided-draft-snapshot/v4.10.1", "guided-draft-snapshot/v4.10.2"}:
         provenance["evidence_basis"] = {"independent_answer": "independent_answer_key",
                                         "teacher_demonstration": "verified_source_solution"}.get(
                                             objective, "answer_key_and_tutor_review")
