@@ -18,6 +18,7 @@ from ..application.generate_guided_answer import GenerateGuidedAnswer
 from ..application.guided_verified_delivery import validate_completed_calculation
 from ..application.solve_guided_calculations import EXPRESSION_INPUT
 from ..domain.experience_evolution import digest
+from ..domain.reasoning_bank import no_new_memory
 from ..domain.guided_answers import validate_source
 from ..domain.guided_disclosure import RENDERED_CONTINUATION_VERSIONS, render_student_continuation
 from ..domain.guided_teacher_delivery import (
@@ -349,6 +350,8 @@ def run_guided_cases(
             or not experience["version"].strip()
         ):
             raise ValueError("experience must declare its version")
+        if not frozen_config and no_new_memory(experience.get("disclosure_teacher")):
+            raise ValueError("A no-update reply contains no teacher advice for a new guided run")
         if any(
             not isinstance(experience.get(role, ""), str)
             for role in ("student", "coach", "disclosure_teacher")

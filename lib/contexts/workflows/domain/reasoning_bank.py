@@ -16,6 +16,16 @@ from .dialogue_style_context import ALL_CONTEXT_TYPES
 
 FORMAT_VERSION = 1
 MAX_RETRIEVAL = 10
+
+
+def no_new_memory(text):
+    """True only when the entire model submission is the optional no-change signal."""
+    if not isinstance(text, str):
+        return False
+    body = text.strip()
+    return body == "<no-new-memory/>" or re.fullmatch(
+        r"(?P<fence>`{3,}|~{3,})[\w.+-]*[ \t]*\r?\n\s*<no-new-memory/>\s*\n(?P=fence)", body
+    ) is not None
 RETRIEVAL_INSTRUCTION = (
     "Retrieve prior procedural experiences applicable to the current task. "
     "Match the task's intent and conditions, including relevant failures and exceptions."

@@ -20,5 +20,6 @@ from .application.reasoning_bank import ReasoningBank
 from .application.optimize_native_sft import OptimizeNativeSft
 from .application.generate_guided_answer import GenerateGuidedAnswer
 from .application.guided_experience import adopt_final_teacher_edition, learn_guided_experience
+from .application.guided_teacher_feedback import freeze_teacher_experience, learn_teacher_feedback
 from .domain.guided_final_experience import recorded_final_proposal
 from .domain.guided_plan_authoring import prepare_calculation_plan_candidate

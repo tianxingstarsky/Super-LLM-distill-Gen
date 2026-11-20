@@ -265,7 +265,7 @@ def test_no_new_memory_receipt_is_reused_without_creating_or_activating_rules(tm
         client = SimpleNamespace(close=lambda: None)
         def chat(self, messages, **options):
             calls.append(messages)
-            return "<no-new-memory/>"
+            return "```json\n<no-new-memory/>\n```"
     app = google_reasoning_bank_application({"backend": "fixture", "model": "fixture"}, root=tmp_path,
         user_key="fixture", client_factory=lambda binding: (Client(), "fixture"))
     observation = {"id": "no-new-principle", "conversation": {"messages": [

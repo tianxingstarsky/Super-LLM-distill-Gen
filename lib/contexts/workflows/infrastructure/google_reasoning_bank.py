@@ -12,7 +12,7 @@ import re
 from filelock import FileLock
 
 from lib.contexts.workflows.domain.experience_evolution import FORMAT_VERSION, digest, validate_scope, validate_experience_text
-from lib.contexts.workflows.domain.reasoning_bank import memory_context_assignments
+from lib.contexts.workflows.domain.reasoning_bank import memory_context_assignments, no_new_memory
 from ..domain.guided_final_experience import FINAL_TEACHER_ROLE, is_final_teacher_edition
 from lib.io_utils import atomic_json
 
@@ -50,9 +50,10 @@ def recorded_episode(observation, user_outcome=None):
     guided_trace = episode.get("guided_answer_projection_version") == 1
     teacher_draft = episode.get("guided_disclosure_projection_version") == 1
     teacher_final = episode.get("guided_final_projection_version") == 1
-    if teacher_final and user_outcome is not None:
+    teacher_followup = episode.get("guided_teacher_followup_projection_version") == 1
+    if (teacher_final or teacher_followup) and user_outcome is not None:
         raise ValueError("final_teacher_assessment_must_be_bound_to_the_recorded_proposal")
-    chronological = agent_trace or guided_trace or teacher_draft or teacher_final
+    chronological = agent_trace or guided_trace or teacher_draft or teacher_final or teacher_followup
     thoughts, actions = [], []
     assistant_indexes = [index for index, message in enumerate(messages) if message.get("role") == "assistant"]
     for position, index in enumerate(assistant_indexes):
@@ -73,12 +74,15 @@ def recorded_episode(observation, user_outcome=None):
         "think_list": thoughts, "action_list": actions,
         "status": "success" if check["keep"] else "fail",
         "assessment_source": {"kind": ("reviewed_teacher_final_answer" if teacher_final else "user_label" if user_outcome else
-                                       "reviewed_teacher_disclosure" if teacher_draft else
+                                       "observed_student_followup" if teacher_followup else "reviewed_teacher_disclosure" if teacher_draft else
                                        "program_key_and_tutor" if guided_trace else "recorded_model_autoeval"),
                               "independently_verified": teacher_final and episode["final_assessment"]["kind"] != "human"},
         "feedback": (("Assessment of the teacher's public answer.\n" if teacher_final else
                      "This is a fallible reviewer observation, not established truth.\n") + check.get("reason", "")),
         **({"guided_final_projection_version": 1, "final_assessment": deepcopy(episode["final_assessment"])} if teacher_final else {}),
+        **({"guided_teacher_followup_projection_version": 1, **({"teacher_action_features_version":
+            episode["teacher_action_features_version"]} if "teacher_action_features_version" in episode else {})}
+           if teacher_followup else {}),
         **({"agent_episode_projection_version": 1, "source_outcome": episode.get("source_outcome", "unknown")}
            if agent_trace else {}),
         **({"guided_answer_projection_version": 1} if guided_trace else {}),
@@ -96,9 +100,14 @@ class GoogleReasoningBank:
             raise ValueError("reasoning_bank_generation_scope_required")
         episode = recorded_episode(observation, user_outcome)
         parent = self.repository.get_version(parent_id) if parent_id else None
+        if parent and no_new_memory(parent.get("text")):
+            raise ValueError("reasoning_bank_no_memory_to_adopt")
         if parent and parent["scope"] != scope:
             raise ValueError("experience_evolution_parent_scope_mismatch")
         final_teacher = episode.get("guided_final_projection_version") == 1
+        teacher_followup = bool(episode.get("guided_teacher_followup_projection_version"))
+        if parent and teacher_followup != any(e.get("guided_teacher_followup_projection_version") == 1 for e in parent["episodes"]):
+            raise ValueError("disclosure_teacher_experience_parent_role_mismatch")
         if parent and is_final_teacher_edition(parent) != final_teacher:
             raise ValueError("final_teacher_experience_parent_role_mismatch")
         policy = self.inductor.policy_identity
@@ -118,11 +127,22 @@ class GoogleReasoningBank:
                     if saved.get("result_sha256") != digest(body):
                         raise ValueError("reasoning_bank_learning_receipt_changed")
                     return saved
-                return self.repository.get_version(saved["edition_id"])
-            result = (self.inductor.induce(episode, generation_scope=FINAL_TEACHER_ROLE if final_teacher else scope,
+                original = self.repository.get_version(saved["edition_id"])
+                if policy and no_new_memory(original["text"]):
+                    # Older builds persisted fenced no-change replies as editions. Preserve the original
+                    # evidence, and replay its meaning without another inference or modifying that edition.
+                    outcome = {"status": "no_update", "scope": scope, "parent_id": parent_id,
+                        "source_receipt": original["source_receipt"], "source_sha256": source_hash,
+                        "previous_edition_id": original["id"], "memory_policy": policy,
+                        "upstream_result": original["upstream_result"], "model_request_receipt":
+                            [{**call, "reused": True} for call in original["model_request_receipt"]]}
+                    return {**outcome, "result_sha256": digest(outcome)}
+                return original
+            generation_scope = FINAL_TEACHER_ROLE if final_teacher else "disclosure_teacher" if teacher_followup else scope
+            result = (self.inductor.induce(episode, generation_scope=generation_scope,
                 current_memory=parent["text"] if parent else "") if policy else self.inductor.induce(episode))
             raw_items = result["memory"]["memory_items"]
-            if policy and "\n\n".join(raw_items).strip() == "<no-new-memory/>":
+            if policy and no_new_memory("\n\n".join(raw_items)):
                 outcome = {"status": "no_update", "scope": scope, "parent_id": parent_id,
                     "source_receipt": {"observation_sha256": digest(observation)},
                     "source_sha256": source_hash, "memory_policy": policy,
@@ -158,6 +178,8 @@ class GoogleReasoningBank:
         path = self.repository.root / "reasoning-bank-active.json"
         if edition_id:
             edition = self.repository.get_version(edition_id)
+            if no_new_memory(edition.get("text")):
+                raise ValueError("reasoning_bank_no_memory_to_adopt")
             if edition["scope"] != scope:
                 raise ValueError("experience_evolution_parent_scope_mismatch")
             indexed = self.bank.index_edition(edition_id)

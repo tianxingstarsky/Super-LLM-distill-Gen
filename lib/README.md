@@ -32,3 +32,11 @@
 | 节点提示词、来源角色、检查点与流式请求 | 同目录的 `RequestNodeModel`，具体请求由 `CheckpointedModelRequest` 适配 |
 | 模型重试、排队、工具决策与 JSON 结果 | [模型应用层](contexts/models/application/README.md) 的请求用例 |
 | 改变模型或存储实现而保持上述行为 | [组合根](bootstrap/README.md) 注入新端口实现 |
+
+## 披露教师的增量经验
+
+使用 `python -m lib.guided_teacher_feedback --help` 查看入口。运行后用 `observe --run RUN --input INPUT --library LIB` 观察已结束的题。重复执行或继续观察其他分片时共用同一个库。带回放首答的分片可加 `--source-run PARENT`。保留父回执用于认证；原始模型调用只计一次。用 `status --library LIB` 查看可归纳的新增观察。
+
+`learn --library LIB --local-url http://localhost:8080/v1 --model MODEL --output candidate.json` 默认每次处理最多16条，至少累积8条；可通过 `--min-new` 和 `--batch-size` 调整。下一版可用 `--parent EDITION` 延续已有经验。转移性核查会挡住已观察到的特定题面引用和内部遥测字段。判断有依据的新变化才消耗一次本地模型调用；结果可能为无更新。
+
+`adopt --library LIB --edition EDITION --trial --output experience.json` 为新实验冻结候选。将 `--experience experience.json` 交给新批次的 `lib.guided_answers`。用 `verify --run NEW_RUN --experience experience.json` 检查真实教师 system 发包与完成回执。仍在运行的题可加 `--case-id ID`。观察对照批和试用批时，应按冻结试验清单提供全部留出题 ID。常规采用检查两道同题、同首答的新增收益及全部观察题的覆盖。只要求末答的题按可重算的数值判定；要求完整解答的题需要可复算的新中间结果或对应轮次已通过的实际训练交付。缺少对照、后续学生发言或真实教师动作时保持试用。个别评审认为学到了某种方法，或生成更长，不作为这些收益。退回已有版本可指定其 ID；退回初始规则使用 `--edition initial`。批次中还有其他角色的经验时传入 `--base BASE.json`。这些操作面向提示经验，学生模型和教师模型都不在此处更新权重。

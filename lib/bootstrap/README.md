@@ -123,3 +123,5 @@ DeepSeek 详尽程度自述；`verbosity_reference_text` 可再选择目标文�
 `training_validation.py` 的 `grpo_validation_application` 延迟装配
 `RunGrpoValidation`、文件收据和可选 TRL 后端。工厂本身不加载模型或启动训练；
 `training_validation_application` 继续提供原有 SFT／CPT→SFT 对照。
+
+`guided_teacher_feedback.py` 将教师反馈用例连到本地课堂的共享模型槽、上游 ReasoningBank 归纳和个人经验库。工作树中的实验通过 `--runtime-root` 指向正在运行该推理服务的仓库。推理仅支持回环端点。

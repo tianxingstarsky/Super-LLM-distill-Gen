@@ -5,7 +5,7 @@ from ..domain.guided_final_experience import is_final_teacher_edition
 from ..domain.experience_evolution import digest, validate_identifier, validate_scope
 from ..domain.reasoning_bank import (
     FORMAT_VERSION, MAX_RETRIEVAL, RETRIEVAL_INSTRUCTION, ReasoningBankUnavailable,
-    edition_reference, entries_from_edition, freeze_selection, validate_memory_context_types,
+    edition_reference, entries_from_edition, freeze_selection, no_new_memory, validate_memory_context_types,
 )
 
 
@@ -23,6 +23,10 @@ class ReasoningBank:
 
     def index_edition(self, edition_id):
         edition = self._port.get_edition(validate_identifier(edition_id))
+        if no_new_memory(edition.get("text")):
+            return {"status": "empty", "indexed": 0, "merged": 0, "edition_ref": edition_reference(edition)}
+        if any(e.get("guided_teacher_followup_projection_version") == 1 for e in edition.get("episodes", [])):
+            raise ValueError("Adopt the observed disclosure-teacher edition in its own role")
         if is_final_teacher_edition(edition):
             raise ValueError("Adopt the final-answer teacher edition for its role instead of indexing it as general reasoning")
         if edition["scope"] == "review":
@@ -60,7 +64,7 @@ class ReasoningBank:
             return {"status": "empty", "matches": [], "receipt": {**receipt, "status": "empty"}}
         try:
             selection = self._port.select_memories(scope, task_text, limit, edition_ids, **context_filter)
-            matches = selection["matches"]
+            matches = [m for m in selection["matches"] if not no_new_memory(m["entry"].get("principle"))]
         except ReasoningBankUnavailable as error:
             return {"status": "unavailable", "matches": [],
                     "receipt": {**receipt, "status": "unavailable", "error": str(error)}}
