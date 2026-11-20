@@ -52,7 +52,7 @@ def test_guided_command_uses_the_selected_local_sft_model_and_cli_source_contrac
     assert "--student-url 'http://localhost:8080/v1' --student-model 'reader''s-qwen'" in command
     assert '--context-tokens 131072 --max-tokens 32768 --workers 2 --no-coach-thinking' in command
     assert "--coach-url 'http://localhost:8080/v1' --coach-model 'reader''s-qwen'" in command
-    assert '--protocol-version 4.10.7' not in command
+    assert '--protocol-version' not in command
     assert any("training-targets.jsonl" in caption.value for caption in ui.caption)
     sample = next(item.value for item in ui.code if 'notebook-01' in item.value)
     assert validate_source(json.loads(sample))['gold'] == {'kind': 'number', 'value': '4'}
@@ -63,8 +63,8 @@ def test_guided_command_uses_the_selected_local_sft_model_and_cli_source_contrac
     command = next(item.value for item in ui.code if 'python -m lib.guided_answers' in item.value)
     assert "--coach-url 'http://127.0.0.1:8081/v1' --coach-model 'qwen-tutor'" in command
     assert "--workers 2 --coach-thinking" in command
-    assert '--protocol-version 4.10.7' in command
-    assert '--output .dataforge/guided-behavior-example' in command
+    assert '--protocol-version 4.10.8' in command
+    assert '--output .dataforge/guided-behavior-v4108' in command
 
 
 def _field(ui, label):
