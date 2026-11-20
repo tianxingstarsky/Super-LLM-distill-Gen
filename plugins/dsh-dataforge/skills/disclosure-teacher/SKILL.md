@@ -29,6 +29,15 @@ exact input shard, including rows outside the selected cases. Use repeated
 attempts finish. Start from saved case files and request receipts. Keep
 student drafts, teacher proposals, published disclosures, and subsequent
 student responses attributed to their actual authors.
+When several original shards are available, observe each run with its own
+input file into the same library. Keep the evidence and gaps for each
+kind of task visible.
+
+If the run reused a student reply, supply the original parent run directory
+with `observe --source-run PARENT`. Repeat the option for additional original
+parents. The original receipt authenticates the shared student checkpoint.
+Count the original model call once. A missing parent leaves that record
+unconfirmed.
 
 Read `awaiting_case` as input rows with no completed case archive yet.
 `by_category` counts observed outcomes. `eligible_unconsumed` counts events
@@ -65,20 +74,32 @@ supply its served model ID. If another checkout owns the local slots, pass
 `--runtime-root` pointing to that checkout. To extend an earlier teacher
 edition, pass its ID as `--parent`. Keep the returned call receipts.
 
-If learning returns an `edition_id`, export it to a fresh path for inspection.
-Supply `--base BASE.json` to carry forward other settings from existing
-experience. A run with no new edition needs no adoption.
+Read the learning receipt. `no_update` and `insufficient_new_evidence`
+produce no edition to try. `candidate_source_overlap` means the learned text
+carries expressions from a source task. It is blocked even for a trial.
+Keep its receipt. `learn --reconsider ID` is available for a blocked older
+edition only after the representation of observed behavior has changed.
+Write the new learning receipt to a separate output path.
+
+For a `candidate`, prepare a **trial** edition for inspection and an
+independent comparison. Supply `--base BASE.json` to carry forward the
+other role settings from existing experience.
 
 ```sh
-python -m lib.guided_teacher_feedback adopt --library LIB --edition ID --output EXPERIENCE.json
+python -m lib.guided_teacher_feedback adopt --trial --library LIB --edition ID --output EXPERIENCE.json
 ```
 
 Read the `disclosure_teacher` text in that file against its originating
 events. A useful change transfers across tasks, preserves student progress
 and points to a grounded next move. Set aside rules that encode a particular
 answer, overstate causation, or give away the solution as the next hint.
-Use the chosen experience in the next independently authorized guided run.
-Keep its source, sampling, teacher, student, and other settings comparable.
+Use this file only for an authorized comparison. Choose held-out tasks
+outside the evidence that produced the candidate. Use the same tasks,
+student checkpoint before the hint, and run settings for both parent and trial.
+For a direct first attempt, use the guided runner's `--reuse-first-from`
+with the original control run. For a keyed worked solution, use
+`--reuse-worked-first-from` with the same original input shard. Supply
+the control as a source run when observing the trial.
 Reuse the normal `python -m lib.guided_answers` invocation with a **new**
 `--output NEW_RUN` and `--experience EXPERIENCE.json`. A frozen or resumed
 run continues with its original edition. Preserve the old experience,
@@ -100,8 +121,17 @@ of their reasoning and final answers. Record all three observations separately.
 If the task was answered before a teacher turn was needed, report that the
 teacher has not been observed. No extra model call is needed to prove absence.
 
-For rollback, adopt the earlier edition (or `initial`) to another new file
-and use it in subsequent runs. Stop on insufficient evidence, an unavailable
+Observe both comparison runs into the same library. To adopt outside a
+trial, use `adopt` again without `--trial`, writing a **new** file. The CLI
+requires improved checked outcomes on at least two distinct held-out cases,
+matching the task contract and first response, with no observed regressions.
+Inspect the paired responses and complete explanations before claiming a
+quality gain. Report the sizes and subject coverage of the comparisons.
+If there are no comparable pairs, keep the prior edition in production.
+
+For rollback, use a previously adopted frozen file or export `initial` to
+another new file with `adopt`. Use that edition in subsequent runs. Stop on
+insufficient evidence, an unavailable
 local model, inconsistent receipts, or a new run that carries the wrong
 edition. Preserve the failing identifiers for inspection. Never repeat live
 training-data generation simply to fill the feedback library.
