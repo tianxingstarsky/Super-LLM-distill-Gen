@@ -13,7 +13,9 @@ from .review_guided_disclosure import (
 from .repair_guided_student_evidence import check_or_repair_student_findings
 from ..domain.guided_disclosure import RENDERED_CONTINUATION_VERSIONS, render_student_continuation
 from ..domain.guided_quantity_scope import storage_quantity_findings, storage_quantity_issue
-from ..domain.guided_local_steps import check_local_step, local_step_material, local_step_target
+from ..domain.guided_local_steps import (
+    LOCAL_SUBMISSION_SCHEMA, check_local_step, local_step_material, local_step_target, scoped_local_messages,
+)
 from ..domain.guided_student_calculations import asserted_arithmetic_errors, recovered_student_calculations
 from ..domain.guided_student_evidence import (
     checked_derivation_conflict, checked_student_approaches, partial_review_evidence, verified_student_stage,
@@ -88,7 +90,8 @@ class GenerateGuidedAnswer:
         language = str(source.get("source", {}).get("language") or "").lower()
         chinese = language.startswith("zh") if language else any("\u4e00" <= ch <= "\u9fff" for ch in question)
         evidenced_progress = protocol_version in EVIDENCED_PROGRESS_VERSIONS
-        immutable_review = protocol_version == "4.10.4"
+        scoped_local = protocol_version == "4.10.5"
+        immutable_review = scoped_local or protocol_version == "4.10.4"
         local_steps = immutable_review or protocol_version == "4.10.3"
         delivery_handoff = local_steps or protocol_version == "4.10.2"
         contextual_operations = delivery_handoff or protocol_version == "4.10.1"
@@ -138,7 +141,7 @@ class GenerateGuidedAnswer:
                     "4.7.1": "v4.7.1", "4.8.0": "v4.8", "4.8.1": "v4.8.1",
                     "4.8.2": "v4.8.2", "4.8.3": "v4.8.3", "4.9.0": "v4.9", "4.9.1": "v4.9.1",
                     "4.10.0": "v4.10.0", "4.10.1": "v4.10.1", "4.10.2": "v4.10.2",
-                    "4.10.3": "v4.10.3", "4.10.4": "v4.10.4"}[protocol_version]
+                    "4.10.3": "v4.10.3", "4.10.4": "v4.10.4", "4.10.5": "v4.10.5"}[protocol_version]
         tutor_instruction = SINGLE_DECISION_REVIEW if single_decision else ANCHORED_REVIEW if anchored else COACH
         if grounded:
             tutor_instruction += "\n\n" + GROUNDED_STUDENT_REVIEW
@@ -228,7 +231,7 @@ class GenerateGuidedAnswer:
                     last_full_input_evidence = (list(active), dict(findings), dict(approaches))
             messages = list(initial_messages)
             local_target = (local_step_target(source, attempts[-1].get("disclosure"), trusted_solution_receipts,
-                                              chinese=chinese) if local_steps and attempts and not send_full else None)
+                                              chinese=chinese, scoped=scoped_local) if local_steps and attempts and not send_full else None)
             direct_first = index == 1 and direct_protocol and (needs_worked_calculation or uses_direct_first(source, protocol_version))
             if direct_first:
                 request_estimate = CALCULATION_ESTIMATE if needs_worked_calculation else DIRECT_STUDENT
@@ -274,13 +277,17 @@ class GenerateGuidedAnswer:
                     # Only the solver changes. No new hint, private assessment or failed
                     # student answer may be smuggled into this controlled continuation.
                     messages = list(attempts[-1]["student_request_messages"])
-                if skip_acquired:
-                    public.append(messages[-1])
-            if local_target:
+            submission_schema = None
+            if local_target and scoped_local:
+                messages = scoped_local_messages(source, local_target, messages[-1]["content"], chinese, student_experience)
+                submission_schema = LOCAL_SUBMISSION_SCHEMA
+            elif local_target:
                 instruction = LOCAL_STEP_STUDENT_ZH if chinese else LOCAL_STEP_STUDENT
                 messages[0] = {"role": "system", "content": "\n\n".join(filter(None, (
                     task_system, student_experience, instruction)))}
-            student = self.request(next_solver, index, messages, None)
+            if disclosed and skip_acquired:
+                public.append(messages[-1])
+            student = self.request(next_solver, index, messages, submission_schema)
             if stop_after_first_student_receipt:
                 # The request port has durably recorded this exact response. Leave all
                 # interpretation, including truncated-output recovery, to the normal run.
@@ -330,7 +337,7 @@ class GenerateGuidedAnswer:
                 )
                 if local_target:
                     status = "awaiting_guidance"
-                    attempt["local_step"], _ = check_local_step(local_target, student, index)
+                    attempt["local_step"], _ = check_local_step(local_target, student, index, scoped=scoped_local)
                     break
                 if truncated_progress and student["finish_reason"] == "length" and not student.get("reasoning_content"):
                     certified = checked_truncated_progress(
@@ -352,7 +359,7 @@ class GenerateGuidedAnswer:
             suffix = student["content"]
             local_findings = {}
             if local_target:
-                action, local_findings = check_local_step(local_target, student, index)
+                action, local_findings = check_local_step(local_target, student, index, scoped=scoped_local)
                 attempt["local_step"] = action
             public.append({"role": "assistant", "content": suffix})
             direct = check_direct_answer(suffix, gold, include_mismatch=grounded) if direct_first and not incomplete else None

@@ -5,6 +5,45 @@ import re
 
 from .guided_answers import contains_chat_control
 from .guided_teaching_steps import verified_steps_digest
+from lib.prompts.workflow_guided_answers import SCOPED_LOCAL_STUDENT, SCOPED_LOCAL_STUDENT_ZH
+
+
+LOCAL_SUBMISSION_SCHEMA = {"anyOf": [
+    {"type": "object", "additionalProperties": False, "required": ["action", "values", "explanation"],
+     "properties": {"action": {"const": "report"}, "values": {"type": "array", "items": {"type": "string"}},
+                    "explanation": {"type": "string"}}},
+    {"type": "object", "additionalProperties": False, "required": ["action", "difficulty"],
+     "properties": {"action": {"const": "blocked"}, "difficulty": {"type": "string"}}},
+]}
+
+
+def scoped_local_messages(source, target, guidance, chinese, experience=""):
+    instruction = SCOPED_LOCAL_STUDENT_ZH if chinese else SCOPED_LOCAL_STUDENT
+    materials = {"original_user_question": source["question"]}
+    if source.get("task_system"):
+        materials["original_task_instructions"] = source["task_system"]
+    packet = {"origin": "tutoring_program", "quoted_source_material": materials,
+              "published_guidance_and_established_work": guidance, "current_local_task": target["request"]}
+    return [{"role": "system", "content": "\n\n".join(filter(None, (experience, instruction, target["request"])))},
+            {"role": "user", "content": json.dumps(packet, ensure_ascii=False)}]
+
+
+def dispatched_local_guidance(payload, source, target, chinese):
+    """Recover only the public context of a source-bound program request with its native submit contract."""
+    messages = payload["messages"]
+    if [m.get("role") for m in messages] != ["system", "user"]:
+        raise ValueError("the scoped local task requires a program request and attributed original materials")
+    packet = json.loads(messages[1]["content"])
+    guidance = packet.get("published_guidance_and_established_work") if isinstance(packet, dict) else None
+    if not isinstance(guidance, str):
+        raise ValueError("the scoped local task lacks its public guidance")
+    expected = scoped_local_messages(source, target, guidance, chinese)
+    contract = payload.get("response_format", {}).get("json_schema", {})
+    if (messages[1] != expected[1] or not messages[0]["content"].endswith(expected[0]["content"])
+            or contract.get("schema") != LOCAL_SUBMISSION_SCHEMA or contract.get("strict") is not True
+            or payload["response_format"].get("type") != "json_schema"):
+        raise ValueError("scoped local request differs from its original task, role or response schema")
+    return guidance
 
 
 _BIT_OPERATIONS = {
@@ -36,7 +75,7 @@ def _trial_hours(question, operation, cap):
     return [str(total), cap, comparison]
 
 
-def local_step_target(source, disclosure, trusted, *, chinese):
+def local_step_target(source, disclosure, trusted, *, chinese, scoped=False):
     catalogue = source.get("verified_teaching_steps")
     if not catalogue or not disclosure:
         return None
@@ -59,6 +98,9 @@ def local_step_target(source, disclosure, trusted, *, chinese):
                  re.fullmatch(r"工时上限由\s*(\d+)\s*降为\s*(\d+)", quote))
         label = ("按顺序给出这组试算项目的总工时、新上限和两者的比较符号（<、= 或 >）" if chinese else
                  "Give this trial pair's total hours, the new cap and the comparison sign (<, = or >), in that order")
+        if scoped:
+            label = ("按顺序给出这组试算项目的总工时、新上限和两者的比较符号" if chinese else
+                     "Give this trial pair's total hours, the new cap and their comparison sign, in that order")
     elif step["id"] == "permitted-pair":
         match = (re.fullmatch(r"The bits at positions (\d+) and (\d+) must be (equal|the same|different)", quote) or
                  re.fullmatch(r"第\s*(\d+)\s*位与第\s*(\d+)\s*位必须(相同|不同)", quote))
@@ -81,7 +123,38 @@ def local_step_target(source, disclosure, trusted, *, chinese):
             "request": label, "expected": expected}
 
 
-def check_local_step(target, response, index):
+def _scoped_action(raw):
+    """Read the field and its actual character range without treating the explanation as checked work."""
+    decoder = json.JSONDecoder()
+    value = decoder.decode(raw)
+    if not isinstance(value, dict):
+        return None, 0, 0
+    # Walk the validated object's top-level members. Escaped names, multiline
+    # arrays and strings quoting JSON examples retain their correct source spans.
+    space = re.compile(r"[ \r\n\t]*")
+    offset = space.match(raw, raw.index("{") + 1).end()
+    members = {}
+    while raw[offset] != "}":
+        name, end = decoder.raw_decode(raw, offset)
+        if name in members:
+            return None, 0, 0
+        colon = space.match(raw, end).end()
+        start = space.match(raw, colon + 1).end()
+        _, end = decoder.raw_decode(raw, start)
+        members[name] = (start, end)
+        offset = space.match(raw, end).end()
+        if raw[offset] == ",":
+            offset = space.match(raw, offset + 1).end()
+    if set(value) == {"action", "difficulty"} and value["action"] == "blocked":
+        return {"blocked": value["difficulty"]}, 0, 0
+    if (set(value) != {"action", "values", "explanation"} or value["action"] != "report"
+            or not isinstance(value["explanation"], str) or not isinstance(value["values"], list)):
+        return None, 0, 0
+    start, end = members["values"]
+    return value["values"], start, end
+
+
+def check_local_step(target, response, index, *, scoped=False):
     raw = response["content"]
     record = {k: v for k, v in target.items() if k != "expected"}
     record.update(status="unverified", independent_derivation_checked=False)
@@ -91,8 +164,13 @@ def check_local_step(target, response, index):
         return record, {}
     end = len(raw.rstrip())
     submission = raw[:end].splitlines()[-1]
+    start = end - len(submission)
     try:
-        action = json.loads(submission)
+        if scoped:
+            action, start, end = _scoped_action(raw)
+            submission = raw[start:end]
+        else:
+            action = json.loads(submission)
     except ValueError:
         return record, {}
     if isinstance(action, dict) and set(action) == {"blocked"} and isinstance(action["blocked"], str) and action["blocked"].strip():
@@ -105,7 +183,7 @@ def check_local_step(target, response, index):
         return {**record, "status": "local_value_mismatch"}, {}
     key = "local:" + target["step_id"]
     finding = {"segment_id": f"a{index}.local", "author": "student", "text": submission,
-               "source_span": [end - len(submission), end], "check_id": key,
+               "source_span": [start, end], "check_id": key,
                "meaning": " ".join((target["question_quote"], target["operation"], target["request"])),
                "reviewed_source": target["receipt"], "evidence_level": "checked_local_operation",
                "basis_id": "reviewed_progress_check", "depends_on": []}

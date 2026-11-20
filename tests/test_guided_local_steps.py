@@ -3,7 +3,9 @@ import json
 import pytest
 
 from lib.contexts.workflows.domain.guided_answers import validate_source
-from lib.contexts.workflows.domain.guided_local_steps import check_local_step, local_step_target
+from lib.contexts.workflows.domain.guided_local_steps import (
+    LOCAL_SUBMISSION_SCHEMA, check_local_step, dispatched_local_guidance, local_step_target, scoped_local_messages,
+)
 from lib.contexts.workflows.domain.guided_teaching_steps import verified_steps_digest
 from lib.contexts.workflows.infrastructure.guided_answer_records import location, run_guided_cases
 from lib.contexts.workflows.infrastructure.guided_teacher_feedback import TeacherFeedbackStore
@@ -27,13 +29,15 @@ def signed_source():
     return validate_source(row, allow_verified_teaching_steps=True, trusted_step_receipts={receipt}), receipt
 
 
-@pytest.mark.parametrize("first_step,status", [
-    ('I read the changed slot in the question.\n["2","1","0"]', "verified_local_value"),
-    ('["2","0","1"]', "local_value_mismatch"),
-    ('{"blocked":"Which bit remains fixed?"}', "blocked"),
-    ('Final answer: 4', "unverified"),
+@pytest.mark.parametrize("version,first_step,status", [
+    ("4.10.3", 'I read the changed slot in the question.\n["2","1","0"]', "verified_local_value"),
+    ("4.10.3", '["2","0","1"]', "local_value_mismatch"),
+    ("4.10.3", '{"blocked":"Which bit remains fixed?"}', "blocked"),
+    ("4.10.3", 'Final answer: 4', "unverified"),
+    ("4.10.5", '{"action":"report","values":["2","1","0"],"explanation":"This explanation was not independently checked."}', "verified_local_value"),
+    ("4.10.5", '{"action":"blocked","difficulty":"I cannot tell which position changed."}', "blocked"),
 ])
-def test_local_reports_and_obstacles_flow_to_the_next_tutor_and_whole_answer(tmp_path, first_step, status):
+def test_local_reports_and_obstacles_flow_to_the_next_tutor_and_whole_answer(tmp_path, version, first_step, status):
     source, receipt = signed_source()
     steps = source["verified_teaching_steps"]["steps"]
     inputs = {}
@@ -43,7 +47,18 @@ def test_local_reports_and_obstacles_flow_to_the_next_tutor_and_whole_answer(tmp
     def request(role, index, messages, schema):
         inputs[role, index] = messages
         if role == "student":
-            reply = {1: "8", 2: first_step, 3: '["10","01"]', 4: solved}[index]
+            pair_report = ('{"action":"report","values":["10","01"],"explanation":"I tried both orders."}'
+                           if version == "4.10.5" else '["10","01"]')
+            reply = {1: "8", 2: first_step, 3: pair_report, 4: solved}[index]
+            if version == "4.10.5" and index in (2, 3):
+                assert schema == LOCAL_SUBMISSION_SCHEMA
+                assert [m["role"] for m in messages] == ["system", "user"]
+                packet = json.loads(messages[-1]["content"])
+                assert packet["origin"] == "tutoring_program"
+                assert packet["quoted_source_material"] == {"original_user_question": source["question"]}
+                assert packet["current_local_task"] in messages[0]["content"]
+            else:
+                assert schema is None
         elif role == "disclosure_draft":
             step = steps[index-1]
             if index == 2:
@@ -59,6 +74,8 @@ def test_local_reports_and_obstacles_flow_to_the_next_tutor_and_whole_answer(tmp
             packet = json.loads(messages[-1]["content"])["proposed_next_teacher_disclosure"]
             reply = dict(decision="release", bridge=packet["bridge"], citations=citations, reason="The hint applies.",
                          pairing=dict(evidence_support=True, student_fit=True, history_fit="first" if index == 1 else "continuous"))
+            if version == "4.10.5":
+                del reply["bridge"]
         elif role == "coach":
             assert index == 4
             reply = dict(decision="supported", diagnosis="Both free choices were counted.", reusable=[], independent_approaches=[])
@@ -79,7 +96,10 @@ def test_local_reports_and_obstacles_flow_to_the_next_tutor_and_whole_answer(tmp
             return {"model":self.name, "url":f"http://localhost/{self.name}", "slots":1, "enable_thinking":False}
 
         def payload(self, messages, schema):
-            return {"messages":messages, "schema":schema, "model":self.name}
+            payload = {"messages":messages, "schema":schema, "model":self.name}
+            if schema:
+                payload["response_format"] = {"type":"json_schema", "json_schema":{"strict":True, "schema":schema}}
+            return payload
 
         def final_answer_payload(self, messages):
             return self.payload(messages, None)
@@ -93,7 +113,7 @@ def test_local_reports_and_obstacles_flow_to_the_next_tutor_and_whole_answer(tmp
     input_path.write_text(json.dumps(source), encoding="utf-8")
     registry.write_text(json.dumps({"schema":"guided-teaching-verification/v1", "receipts":[receipt]}), encoding="utf-8")
     run_guided_cases(input_path, run, {"student":Endpoint("learner"), "coach":Endpoint("reviewer")},
-                     {"version":"test"}, 3, protocol_version="4.10.3", until_correct=True, verified_step_receipts=registry)
+                     {"version":"test"}, 3, protocol_version=version, until_correct=True, verified_step_receipts=registry)
     case_path = location(run,source["id"])/"case.json"
     case = json.loads(case_path.read_bytes())
     assert case["status"] == "accepted" and case["verification"]["answer_key_check"]
@@ -110,6 +130,7 @@ def test_local_reports_and_obstacles_flow_to_the_next_tutor_and_whole_answer(tmp
     for item in fields:
         raw = case["attempts"][item["source_attempt"]-1]["student"]["content"]
         assert raw[slice(*item["source_span"])] == item["text"]
+        assert "explanation" not in item["text"]
     assert "continuation_provenance" not in case
     store = TeacherFeedbackStore(tmp_path/"feedback")
     observed = store.observe(run, input_path)
@@ -137,6 +158,34 @@ def test_local_operation_needs_the_bound_source_and_a_matching_verifier():
     assert local_step_target(source, hint, set(), chinese=False) is None
     assert local_step_target({**source,"question":"another task"}, hint, {receipt}, chinese=False) is None
     assert local_step_target(source, {**hint,"source_step_id":"another-target"}, {receipt}, chinese=False) is None
+
+
+def test_scoped_submissions_bind_only_reported_values_and_attributed_native_request():
+    source, receipt = signed_source()
+    hint = {"source_step_receipt":receipt, "source_step_id":"fixed-position", "text":"Mark the slot."}
+    target = local_step_target(source, hint, {receipt}, chinese=False, scoped=True)
+    messages = scoped_local_messages(source, target, "Published material", False)
+    payload = {"messages":messages, "response_format":{"type":"json_schema",
+               "json_schema":{"strict":True, "schema":LOCAL_SUBMISSION_SCHEMA}}}
+    assert dispatched_local_guidance(payload, source, target, False) == "Published material"
+    for altered in ({**payload, "response_format":{}}, {**payload, "messages":[messages[0], {"role":"tool","content":messages[1]["content"]}]},
+                    {**payload, "messages":[messages[0], {"role":"user","content":messages[1]["content"].replace("tutoring_program", "original_user")}]}):
+        with pytest.raises(ValueError):
+            dispatched_local_guidance(altered, source, target, False)
+
+    # The same values can occur in prose. Bind to the actual JSON array, including its whitespace.
+    report = r'{"action":"report","explanation":"I considered [\"2\",\"1\",\"0\"]","val\u0075es": ["2", "1", "0"]}'
+    def check(raw):
+        return check_local_step(target, {"content":raw, "finish_reason":"stop"}, 2, scoped=True)
+    action, facts = check(report)
+    assert action["status"] == "verified_local_value" and not action["independent_derivation_checked"]
+    finding = next(iter(facts.values()))
+    assert report[slice(*finding["source_span"])] == finding["text"] == '["2", "1", "0"]'
+    assert check(report.replace('["2", "1", "0"]', '["2","0","1"]'))[0]["status"] == "local_value_mismatch"
+    for invalid in (report.replace('"action":"report"', '"action":"blocked","action":"report"'),
+                    report.replace('["2", "1", "0"]', '{"blocked":"unrelated"}'),
+                    report + " trailing content", '["2","1","0"]'):
+        assert check(invalid)[0]["status"] == "unverified" and not check(invalid)[1]
 
 
 def test_portfolio_substep_checks_the_selected_projects_hours_and_updated_cap():

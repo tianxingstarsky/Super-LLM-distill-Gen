@@ -10,7 +10,7 @@ from ..application.guided_experience import observed_teacher_disclosure
 from ..application.guided_teacher_feedback import OBSERVED_REWARDS, observed_followup
 from ..domain.experience_evolution import digest
 from ..domain.guided_answers import inspect_answer, read_teacher_submission
-from ..domain.guided_local_steps import check_local_step, local_step_material, local_step_target
+from ..domain.guided_local_steps import check_local_step, dispatched_local_guidance, local_step_material, local_step_target
 from ..domain.guided_student_calculations import recovered_student_calculations
 from ..domain.guided_training_targets import GUIDED_TARGET_FILE
 from .guided_answer_records import (
@@ -136,16 +136,18 @@ def teaching_events(case, folder, protocol, parents, experience, *, source, trus
                         student_excerpt={"tail": raw[-900:], "chars": len(raw), "sha256": digest(raw),
                                          "is_excerpt": len(raw) > 900})
                     event["category"] = outcome if origin == "teacher" else "program_disclosure"
-                    if protocol in {"4.10.3", "4.10.4"} and not after.get("solving_role"):
+                    if protocol in {"4.10.3", "4.10.4", "4.10.5"} and not after.get("solving_role"):
                         language = str(source.get("source", {}).get("language") or "").lower()
                         chinese = language.startswith("zh") if language else any("\u4e00" <= c <= "\u9fff" for c in source["question"])
-                        target = local_step_target(source, hint, trusted, chinese=chinese)
+                        scoped = protocol == "4.10.5"
+                        target = local_step_target(source, hint, trusted, chinese=chinese, scoped=scoped)
                         if target:
-                            actual = receipt["request"]["messages"][-1]
-                            if (actual["role"] != "tool" or not actual["content"].startswith(local_step_material(target))
+                            actual = (dispatched_local_guidance(receipt["request"], source, target, chinese)
+                                      if scoped else receipt["request"]["messages"][-1]["content"])
+                            if (not actual.startswith(local_step_material(target))
                                     or receipt["response"].get("model") != learner_model):
                                 raise ValueError("local reply lacks the original dispatched operation or verified learner")
-                            replay, facts = check_local_step(target, receipt["response"], after["attempt"])
+                            replay, facts = check_local_step(target, receipt["response"], after["attempt"], scoped=scoped)
                             if after.get("local_step") != replay:
                                 raise ValueError("archived local outcome differs from the authenticated response")
                             evidence["local_operation"] = {**replay, "task_author": "program",

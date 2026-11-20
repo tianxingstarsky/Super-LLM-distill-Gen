@@ -74,6 +74,7 @@ def main():
                      "4.10.2 can hand off a completed draft with repeated final declarations after full disclosure. "
                      "4.10.3 lets the learner submit supported local operations before answering the whole task. "
                      "4.10.4 reviews the author's public text with a private decision and evidence. "
+                     "4.10.5 frames each supported local operation as a program request with a native report or blocked response. "
                      "Pin the same version in both arms of an experience comparison. Existing runs use their manifest.")
     cli.add_argument("--recover-context-from", type=Path, metavar="PARENT",
                      help="Finish selected cases stopped before a local chat dispatch exceeded its slot. "
